@@ -26,14 +26,14 @@ dotenv_1.default.config();
 let currentUser;
 let newsletter = new newsletter_1.default();
 let waitingInput = false;
-const bot = new node_telegram_bot_api_1.default(process.env.API_TOKEN, 
-// { webHook: { port: +process.env.PORT! } }
-{ polling: {
-        interval: 300,
-        autoStart: true
-    } });
-bot.on("polling_error", err => console.log(err.message));
-// bot.setWebHook(`${process.env.APP_URL}/bot${process.env.API_TOKEN}`);
+const bot = new node_telegram_bot_api_1.default(process.env.API_TOKEN, { webHook: { port: +process.env.PORT } }
+// { polling: {
+//     interval: 300,
+//     autoStart: true
+//   }}
+);
+//bot.on("polling_error", err => console.log(err.message));
+bot.setWebHook(`${process.env.APP_URL}/bot${process.env.API_TOKEN}`);
 bot.setMyCommands(commands_1.default);
 bot.onText(/\/start/, onStart);
 bot.onText(/\/add_message/, onAddMessage);
