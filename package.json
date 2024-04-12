@@ -1,0 +1,25 @@
+{
+  "name": "postmanbot",
+  "version": "1.0.0",
+  "description": "",
+  "main": "out/index.js",
+  "scripts": {
+    "build": "npx tsc",
+    "start": "node out/index.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "axios": "^1.6.8",
+    "dotenv": "^16.4.5",
+    "mongodb": "^6.5.0",
+    "node-telegram-bot-api": "^0.65.1",
+    "tmp-promise": "^3.0.3"
+  },
+  "devDependencies": {
+    "@types/node": "^20.12.7",
+    "@types/node-telegram-bot-api": "^0.64.6",
+    "typescript": "^5.4.5"
+  }
+}
