@@ -8,6 +8,13 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
         step((generator = generator.apply(thisArg, _arguments || [])).next());
     });
 };
+var __asyncValues = (this && this.__asyncValues) || function (o) {
+    if (!Symbol.asyncIterator) throw new TypeError("Symbol.asyncIterator is not defined.");
+    var m = o[Symbol.asyncIterator], i;
+    return m ? m.call(o) : (o = typeof __values === "function" ? __values(o) : o[Symbol.iterator](), i = {}, verb("next"), verb("throw"), verb("return"), i[Symbol.asyncIterator] = function () { return this; }, i);
+    function verb(n) { i[n] = o[n] && function (v) { return new Promise(function (resolve, reject) { v = o[n](v), settle(resolve, reject, v.done, v.value); }); }; }
+    function settle(resolve, reject, d, v) { Promise.resolve(v).then(function(v) { resolve({ value: v, done: d }); }, reject); }
+};
 var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
@@ -16,7 +23,9 @@ const node_telegram_bot_api_1 = __importDefault(require("node-telegram-bot-api")
 const mongodb_1 = require("mongodb");
 const mongodb_2 = require("mongodb");
 class DatabaseContext {
-    constructor() { }
+    constructor() {
+        this.subjectFromBodyLength = 30;
+    }
     static getInstance() {
         return __awaiter(this, void 0, void 0, function* () {
             if (!this.instance) {
@@ -40,7 +49,7 @@ class DatabaseContext {
             this.users = db.collection("users");
             this.messages = db.collection("messages");
             this.bots = db.collection("bots");
-            this.recievers = db.collection("recievers");
+            this.receivers = db.collection("recievers");
         });
     }
     close() {
@@ -50,42 +59,78 @@ class DatabaseContext {
     }
     getMessageList(userId) {
         return __awaiter(this, void 0, void 0, function* () {
-            const userMessages = yield this.messages.find({ user_id: userId }).toArray();
+            var _a, e_1, _b, _c;
+            const userMessages = this.messages.find({ user_id: userId });
+            let ind = 0;
             let resultList = "Your saved messages:";
-            for (let ind = 0; ind < userMessages.length; ind++) {
-                let message = userMessages[ind];
-                if (message["subject"] != null) {
-                    resultList += `\n${ind + 1}. ${message["subject"]}`;
+            try {
+                for (var _d = true, userMessages_1 = __asyncValues(userMessages), userMessages_1_1; userMessages_1_1 = yield userMessages_1.next(), _a = userMessages_1_1.done, !_a; _d = true) {
+                    _c = userMessages_1_1.value;
+                    _d = false;
+                    const message = _c;
+                    resultList += this.createMessageListEntry(ind, message);
+                    ++ind;
                 }
-                else if (message["body"] != null) {
-                    resultList += `\n${ind + 1}. ${message["body"].substring(0, 30)}`;
+            }
+            catch (e_1_1) { e_1 = { error: e_1_1 }; }
+            finally {
+                try {
+                    if (!_d && !_a && (_b = userMessages_1.return)) yield _b.call(userMessages_1);
                 }
-                else {
-                    resultList += `\n${ind + 1}. EmptyMessage`;
-                }
+                finally { if (e_1) throw e_1.error; }
             }
             return resultList;
         });
     }
     getBotList(userId) {
         return __awaiter(this, void 0, void 0, function* () {
-            const tokens = yield this.bots.find({ user_id: userId }).toArray();
+            var _a, e_2, _b, _c;
+            const userTokens = this.bots.find({ user_id: userId });
+            let ind = 0;
             let resultList = "Your saved bots:";
-            for (let ind = 0; ind < tokens.length; ind++) {
-                const userBot = new node_telegram_bot_api_1.default(tokens[ind]["token"]);
-                const botName = (yield userBot.getMe()).username;
-                resultList += `\n${ind + 1}. ${botName !== null && botName !== void 0 ? botName : "Unavailable"}`;
+            try {
+                for (var _d = true, userTokens_1 = __asyncValues(userTokens), userTokens_1_1; userTokens_1_1 = yield userTokens_1.next(), _a = userTokens_1_1.done, !_a; _d = true) {
+                    _c = userTokens_1_1.value;
+                    _d = false;
+                    const token = _c;
+                    const userBot = new node_telegram_bot_api_1.default(token["token"]);
+                    const botName = (yield userBot.getMe()).username;
+                    resultList += `\n${ind + 1}. ${botName !== null && botName !== void 0 ? botName : "Unavailable"}`;
+                    ++ind;
+                }
+            }
+            catch (e_2_1) { e_2 = { error: e_2_1 }; }
+            finally {
+                try {
+                    if (!_d && !_a && (_b = userTokens_1.return)) yield _b.call(userTokens_1);
+                }
+                finally { if (e_2) throw e_2.error; }
             }
             return resultList;
         });
     }
     getRecieverList(userId) {
         return __awaiter(this, void 0, void 0, function* () {
-            var _a;
-            const recievers = yield this.recievers.find({ user_id: userId }).toArray();
+            var _a, e_3, _b, _c;
+            var _d;
+            const userRecievers = this.receivers.find({ user_id: userId });
+            let ind = 0;
             let resultList = "Your saved recievers:";
-            for (let ind = 0; ind < recievers.length; ind++) {
-                resultList += `\n${ind + 1}. ${(_a = recievers[ind]["caption"]) !== null && _a !== void 0 ? _a : `Unnamed list ${ind + 1}`}`;
+            try {
+                for (var _e = true, userRecievers_1 = __asyncValues(userRecievers), userRecievers_1_1; userRecievers_1_1 = yield userRecievers_1.next(), _a = userRecievers_1_1.done, !_a; _e = true) {
+                    _c = userRecievers_1_1.value;
+                    _e = false;
+                    const recievers = _c;
+                    resultList += `\n${ind + 1}. ${(_d = recievers["caption"]) !== null && _d !== void 0 ? _d : `Unnamed list ${ind + 1}`}`;
+                    ++ind;
+                }
+            }
+            catch (e_3_1) { e_3 = { error: e_3_1 }; }
+            finally {
+                try {
+                    if (!_e && !_a && (_b = userRecievers_1.return)) yield _b.call(userRecievers_1);
+                }
+                finally { if (e_3) throw e_3.error; }
             }
             return resultList;
         });
@@ -97,6 +142,19 @@ class DatabaseContext {
                 collection.deleteOne({ user_id: userId });
             }
         });
+    }
+    createMessageListEntry(ind, message) {
+        let entry;
+        if (message["subject"]) {
+            entry = `\n${ind + 1}. ${message["subject"]}`;
+        }
+        else if (message["body"] != null) {
+            entry = `\n${ind + 1}. ${message["body"].substring(0, this.subjectFromBodyLength)}...`;
+        }
+        else {
+            entry = `\n${ind + 1}. EmptyMessage`;
+        }
+        return entry;
     }
 }
 exports.default = DatabaseContext;

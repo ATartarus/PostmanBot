@@ -1,33 +1,37 @@
 import dotenv from "dotenv";
-import https from "https";
 import TelegramBot, { InputMedia } from "node-telegram-bot-api";
 import User from "./models/user";
 import DatabaseContext from "./services/databaseContext";
 import Token from "./models/bot";
-import RecieversList from "./models/recieversList";
-import Newsletter from "./newsletter";
+import ReceiversList from "./models/receiversList";
+import Newsletter, { NewsletterProperty } from "./newsletter";
 import MessageBuilder from "./services/messageBuilder";
 import commands from "./commands";
-
+import { getResource, createInlineKeyboard, parseKeyboardCallback } from "./utils";
 
 dotenv.config();
 
+const baseBotUrl = "https://api.telegram.org/file/bot";
+
 let currentUser: User;
 let newsletter = new Newsletter();
+
 let waitingInput = false;
+//Таймер отправки последнего сообщения в группе
+const messageAwaitTime = 1000;
 
 
 const bot = new TelegramBot(
     process.env.API_TOKEN!,
-    { webHook: { port: +process.env.PORT! } }
-    // { polling: {
-    //     interval: 300,
-    //     autoStart: true
-    //   }}
+    //{ webHook: { port: +process.env.PORT! } }
+    { polling: {
+        interval: 300,
+        autoStart: true
+      }}
 );
 
-//bot.on("polling_error", err => console.log(err.message));
-bot.setWebHook(`${process.env.APP_URL}/bot${process.env.API_TOKEN}`);
+bot.on("polling_error", err => console.log(err.message));
+//bot.setWebHook(`${process.env.APP_URL}/bot${process.env.API_TOKEN}`);
 
 bot.setMyCommands(commands);
 
@@ -70,9 +74,15 @@ bot.on("message", async (msg) => {
 
         
         if (builder.timeout) clearTimeout(builder.timeout);
+        /*
+        Единственный таймаут в проекте, мне и самому не хотелось его сюда пихать, но он тут просто необходим
+        т.к. при отправке MediaGroup (нескольких изображений в одном сообшений) тг отсылает каждую пикчу отдельным сообщением,
+        и если принадлежность сообщения к группе можно определить через msg.media_group_id, то конец этой группы никак не помечается.
+        Остается только просить пользователя подтверждать отправку, либо юзать таймаут.
+        */
         builder.timeout = setTimeout(async () => {
             await onMessageAddCallback();
-        }, 1000);
+        }, messageAwaitTime);
     }
     else if (msg.text) {
         let textIsCommand = false;
@@ -144,14 +154,14 @@ async function onMessageAddCallback() {
     }
 
     const dbContext = await DatabaseContext.getInstance();
-    await dbContext.messages.insertOne(message)
-        .then((doc) => {
-            dbContext.validateCollectionSize(dbContext.messages, currentUser.id);
-            bot.sendMessage(currentUser.id, "Message added successfully!");
-        })
-        .catch((error) => {
-            bot.sendMessage(currentUser.id, "Error. Message was not added!");
-        });
+
+    try {
+        await dbContext.messages.insertOne(message);
+        dbContext.validateCollectionSize(dbContext.messages, currentUser.id);
+        bot.sendMessage(currentUser.id, "Message added successfully!");
+    } catch (error) {
+        bot.sendMessage(currentUser.id, "Error. Message was not added!");
+    }
 }
 
 async function onListMessages() {
@@ -171,24 +181,25 @@ async function onAddBot() {
 
         const botToken = msg.text!;
         const userBot = new TelegramBot(botToken);
-        await userBot.getMe()
-            .then(async (userBot) => {
-                const token = new Token(currentUser.id, botToken);
-                const dbContext = await DatabaseContext.getInstance();
 
-                await dbContext.bots.insertOne(token)
-                    .then((doc) => {
-                        dbContext.validateCollectionSize(dbContext.bots, currentUser.id);
-                        bot.sendMessage(msg.chat.id, "Bot added successfully!");
-                    })
-                    .catch((error) => {
-                        bot.sendMessage(msg.chat.id, "Error. Bot was not added!");
-                    });
-            })
-            .catch((error) => {
-                bot.sendMessage(msg.chat.id, `Error. Unable to establish connection with specified bot.
-                    Check token validity and bot settings.`);
-            })
+        try {
+            await userBot.getMe();
+
+            try {
+                const dbContext = await DatabaseContext.getInstance();
+                const token = new Token(currentUser.id, botToken);
+
+                await dbContext.bots.insertOne(token);
+                dbContext.validateCollectionSize(dbContext.bots, currentUser.id);
+                bot.sendMessage(msg.chat.id, "Bot added successfully!");
+            } catch (error) {
+                bot.sendMessage(msg.chat.id, "Error. Bot was not added!");
+            }
+
+        } catch (error) {
+            bot.sendMessage(msg.chat.id, `Error. Unable to establish connection with specified bot.
+            Check token validity and bot settings.`);
+        }
     });
 }
 
@@ -209,12 +220,12 @@ async function onAddRecievers() {
             return;
         }
 
-        const recievers = new RecieversList(currentUser.id, msg.document.file_id, msg.caption);
+        const recievers = new ReceiversList(currentUser.id, msg.document.file_id, msg.caption);
         const dbContext = await DatabaseContext.getInstance();
 
-        await dbContext.recievers.insertOne(recievers)
+        await dbContext.receivers.insertOne(recievers)
             .then((doc) => {
-                dbContext.validateCollectionSize(dbContext.recievers, currentUser.id);
+                dbContext.validateCollectionSize(dbContext.receivers, currentUser.id);
                 bot.sendMessage(msg.chat.id, "File added successfully!");
             })
             .catch((error) => {
@@ -234,88 +245,42 @@ async function onListRecievers() {
 async function onCreateNewsletter() {
     newsletter = new Newsletter();
     const dbContext = await DatabaseContext.getInstance();
-    let list = await dbContext.getMessageList(currentUser.id);
-    let count = await dbContext.messages.countDocuments({ user_id: currentUser.id });
 
-    let keyboard = [];
-    let row: any[] = [];
-
-    for (let i = 0; i < count; i++) {
-        if (i % 3 == 0) {
-            keyboard.push(row);
-            row = [];
+    //Строковый енам не поддерживает реверс маппинг(
+    for (const property of [NewsletterProperty.Messages, NewsletterProperty.Bots, NewsletterProperty.Receivers]) {
+        let list = "Not found";
+        let count = 0;
+        
+        switch (property) {
+            case NewsletterProperty.Messages:
+                list = await dbContext.getMessageList(currentUser.id);
+                //можно было бы обращаться к dbContext.messages/bots/receivers через NewsletterProperty как в обработчике callback_query ниже,
+                //но тогда NewsletterProperty было бы уже и DatabaseContextProperty. Сокращается две строчки но вносится лишняя зависимость.
+                count = await dbContext.messages.countDocuments({ user_id: currentUser.id });
+                break;
+            case NewsletterProperty.Bots:
+                list = await dbContext.getBotList(currentUser.id);
+                count = await dbContext.bots.countDocuments({ user_id: currentUser.id });
+                break;
+            case NewsletterProperty.Receivers:
+                list = await dbContext.getRecieverList(currentUser.id);
+                count = await dbContext.receivers.countDocuments({ user_id: currentUser.id });
+                break;
         }
-        row.push({text: (i + 1).toString(), callback_data: 'm' + i})
+
+        await bot.sendMessage(currentUser.id, list, {
+            reply_markup: {
+                inline_keyboard: createInlineKeyboard(count, 3, property as NewsletterProperty)
+            }
+        });
     }
-    if (row.length > 0) {
-        keyboard.push(row);
-    }
-
-    await bot.sendMessage(currentUser.id, list, {
-        reply_markup: {
-            inline_keyboard: keyboard
-        }
-    });
-
-    list = await dbContext.getBotList(currentUser.id);
-    count = await dbContext.bots.countDocuments({ user_id: currentUser.id });
-    
-    keyboard = [];
-    row = [];
-
-    for (let i = 0; i < count; i++) {
-        if (i % 3 == 0) {
-            keyboard.push(row);
-            row = [];
-        }
-        row.push({text: (i + 1).toString(), callback_data: 'b' + i})
-    }
-    if (row.length > 0) {
-        keyboard.push(row);
-    }
-
-    await bot.sendMessage(currentUser.id, list, {
-        reply_markup: {
-            inline_keyboard: keyboard
-        }
-    });
-
-    list = await dbContext.getRecieverList(currentUser.id);
-    count = await dbContext.recievers.countDocuments({ user_id: currentUser.id });
-    keyboard = [];
-    row = [];
-
-    for (let i = 0; i < count; i++) {
-        if (i % 3 == 0) {
-            keyboard.push(row);
-            row = [];
-        }
-        row.push({text: (i + 1).toString(), callback_data: 'r' + i})
-    }
-    if (row.length > 0) {
-        keyboard.push(row);
-    }
-
-    await bot.sendMessage(currentUser.id, list, {
-        reply_markup: {
-            inline_keyboard: keyboard
-        }
-    });
 }
 
 bot.on('callback_query', async (ctx) => {
-    const data = ctx.data;
-    if (data == undefined) return;
+    if (ctx.data == undefined) return;
 
-    if (data.charAt(0) == 'm') {
-        newsletter.messages.push(Number.parseInt(data.substring(1)));
-    }
-    else if (data.charAt(0) == 'b') {
-        newsletter.bots.push(Number.parseInt(data.substring(1)));
-    }
-    else if (data.charAt(0) == 'r') {
-        newsletter.recievers.push(Number.parseInt(data.substring(1)));
-    }
+    const keyboardData = parseKeyboardCallback(ctx.data);
+    newsletter[keyboardData.property].push(keyboardData.buttonIndex);
 })
 
 
@@ -328,7 +293,7 @@ async function onSendNewsletter() {
     const dbContext = await DatabaseContext.getInstance();
     const messages = await dbContext.messages.find({ user_id: currentUser.id }).toArray();
     const bots = await dbContext.bots.find({ user_id: currentUser.id }).toArray();
-    const recievers = await dbContext.recievers.find({ user_id: currentUser.id }).toArray();
+    const recievers = await dbContext.receivers.find({ user_id: currentUser.id }).toArray();
 
     newsletter.messages.forEach(async (messageInd) => {
         const messageDoc = messages[messageInd];
@@ -344,10 +309,10 @@ async function onSendNewsletter() {
             const botToken = bots[botInd]["token"];
             const helperBot = new TelegramBot(botToken);
 
-            newsletter.recievers.forEach(async (recieverInd) => {
+            newsletter.receivers.forEach(async (recieverInd) => {
                 const fileId = recievers[recieverInd]["csv_file_id"];
                 const file = await bot.getFile(fileId);
-                const url = `https://api.telegram.org/file/bot${process.env.API_TOKEN}/${file.file_path}`;
+                const url = `${baseBotUrl}${process.env.API_TOKEN}/${file.file_path}`;
                 const fileContent = (await getResource(url)).toString("utf8");
                 const userIds = fileContent.split(",");
 
@@ -355,7 +320,7 @@ async function onSendNewsletter() {
                     if (imgIds != null) {
                         const imgFiles = await Promise.all(imgIds.map(async (id) => await bot.getFile(id)));                        
                         const responses = await Promise.all(imgFiles.map(async (file) => {
-                            const url = `https://api.telegram.org/file/bot${process.env.API_TOKEN}/${file.file_path}`;    
+                            const url = `${baseBotUrl}${process.env.API_TOKEN}/${file.file_path}`; 
                             return await getResource(url);
                         }));
                         
@@ -391,20 +356,4 @@ async function onSendNewsletter() {
     });
 
     bot.sendMessage(currentUser.id, "Newsletter sended!");
-}
-
-async function getResource(url: string): Promise<Buffer> {
-    return new Promise((resolve, reject) => {
-        https.get(url, (response) => {
-            const chunks: Uint8Array[] = [];
-            response.on("data", (chunk) => {
-                chunks.push(chunk);
-            })
-            response.on("end", () => {
-                resolve(Buffer.concat(chunks));
-            });
-        }).on("error", (error) =>{
-            reject(error);
-        })
-    });
 }

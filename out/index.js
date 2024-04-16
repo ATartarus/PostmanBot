@@ -1,4 +1,27 @@
 "use strict";
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || function (mod) {
+    if (mod && mod.__esModule) return mod;
+    var result = {};
+    if (mod != null) for (var k in mod) if (k !== "default" && Object.prototype.hasOwnProperty.call(mod, k)) __createBinding(result, mod, k);
+    __setModuleDefault(result, mod);
+    return result;
+};
 var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, generator) {
     function adopt(value) { return value instanceof P ? value : new P(function (resolve) { resolve(value); }); }
     return new (P || (P = Promise))(function (resolve, reject) {
@@ -13,27 +36,30 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 };
 Object.defineProperty(exports, "__esModule", { value: true });
 const dotenv_1 = __importDefault(require("dotenv"));
-const https_1 = __importDefault(require("https"));
 const node_telegram_bot_api_1 = __importDefault(require("node-telegram-bot-api"));
 const user_1 = __importDefault(require("./models/user"));
 const databaseContext_1 = __importDefault(require("./services/databaseContext"));
 const bot_1 = __importDefault(require("./models/bot"));
-const recieversList_1 = __importDefault(require("./models/recieversList"));
-const newsletter_1 = __importDefault(require("./newsletter"));
+const receiversList_1 = __importDefault(require("./models/receiversList"));
+const newsletter_1 = __importStar(require("./newsletter"));
 const messageBuilder_1 = __importDefault(require("./services/messageBuilder"));
 const commands_1 = __importDefault(require("./commands"));
+const utils_1 = require("./utils");
 dotenv_1.default.config();
+const baseBotUrl = "https://api.telegram.org/file/bot";
 let currentUser;
 let newsletter = new newsletter_1.default();
 let waitingInput = false;
-const bot = new node_telegram_bot_api_1.default(process.env.API_TOKEN, { webHook: { port: +process.env.PORT } }
-// { polling: {
-//     interval: 300,
-//     autoStart: true
-//   }}
-);
-//bot.on("polling_error", err => console.log(err.message));
-bot.setWebHook(`${process.env.APP_URL}/bot${process.env.API_TOKEN}`);
+//Таймер отправки последнего сообщения в группе
+const messageAwaitTime = 1000;
+const bot = new node_telegram_bot_api_1.default(process.env.API_TOKEN, 
+//{ webHook: { port: +process.env.PORT! } }
+{ polling: {
+        interval: 300,
+        autoStart: true
+    } });
+bot.on("polling_error", err => console.log(err.message));
+//bot.setWebHook(`${process.env.APP_URL}/bot${process.env.API_TOKEN}`);
 bot.setMyCommands(commands_1.default);
 bot.onText(/\/start/, onStart);
 bot.onText(/\/add_message/, onAddMessage);
@@ -71,9 +97,15 @@ bot.on("message", (msg) => __awaiter(void 0, void 0, void 0, function* () {
         }
         if (builder.timeout)
             clearTimeout(builder.timeout);
+        /*
+        Единственный таймаут в проекте, мне и самому не хотелось его сюда пихать, но он тут просто необходим
+        т.к. при отправке MediaGroup (нескольких изображений в одном сообшений) тг отсылает каждую пикчу отдельным сообщением,
+        и если принадлежность сообщения к группе можно определить через msg.media_group_id, то конец этой группы никак не помечается.
+        Остается только просить пользователя подтверждать отправку, либо юзать таймаут.
+        */
         builder.timeout = setTimeout(() => __awaiter(void 0, void 0, void 0, function* () {
             yield onMessageAddCallback();
-        }), 1000);
+        }), messageAwaitTime);
     }
     else if (msg.text) {
         let textIsCommand = false;
@@ -137,14 +169,14 @@ function onMessageAddCallback() {
             return;
         }
         const dbContext = yield databaseContext_1.default.getInstance();
-        yield dbContext.messages.insertOne(message)
-            .then((doc) => {
+        try {
+            yield dbContext.messages.insertOne(message);
             dbContext.validateCollectionSize(dbContext.messages, currentUser.id);
             bot.sendMessage(currentUser.id, "Message added successfully!");
-        })
-            .catch((error) => {
+        }
+        catch (error) {
             bot.sendMessage(currentUser.id, "Error. Message was not added!");
-        });
+        }
     });
 }
 function onListMessages() {
@@ -162,23 +194,23 @@ function onAddBot() {
             waitingInput = false;
             const botToken = msg.text;
             const userBot = new node_telegram_bot_api_1.default(botToken);
-            yield userBot.getMe()
-                .then((userBot) => __awaiter(this, void 0, void 0, function* () {
-                const token = new bot_1.default(currentUser.id, botToken);
-                const dbContext = yield databaseContext_1.default.getInstance();
-                yield dbContext.bots.insertOne(token)
-                    .then((doc) => {
+            try {
+                yield userBot.getMe();
+                try {
+                    const dbContext = yield databaseContext_1.default.getInstance();
+                    const token = new bot_1.default(currentUser.id, botToken);
+                    yield dbContext.bots.insertOne(token);
                     dbContext.validateCollectionSize(dbContext.bots, currentUser.id);
                     bot.sendMessage(msg.chat.id, "Bot added successfully!");
-                })
-                    .catch((error) => {
+                }
+                catch (error) {
                     bot.sendMessage(msg.chat.id, "Error. Bot was not added!");
-                });
-            }))
-                .catch((error) => {
+                }
+            }
+            catch (error) {
                 bot.sendMessage(msg.chat.id, `Error. Unable to establish connection with specified bot.
-                    Check token validity and bot settings.`);
-            });
+            Check token validity and bot settings.`);
+            }
         }));
     });
 }
@@ -197,11 +229,11 @@ function onAddRecievers() {
                 bot.sendMessage(msg.chat.id, "You must send csv file");
                 return;
             }
-            const recievers = new recieversList_1.default(currentUser.id, msg.document.file_id, msg.caption);
+            const recievers = new receiversList_1.default(currentUser.id, msg.document.file_id, msg.caption);
             const dbContext = yield databaseContext_1.default.getInstance();
-            yield dbContext.recievers.insertOne(recievers)
+            yield dbContext.receivers.insertOne(recievers)
                 .then((doc) => {
-                dbContext.validateCollectionSize(dbContext.recievers, currentUser.id);
+                dbContext.validateCollectionSize(dbContext.receivers, currentUser.id);
                 bot.sendMessage(msg.chat.id, "File added successfully!");
             })
                 .catch((error) => {
@@ -221,78 +253,39 @@ function onCreateNewsletter() {
     return __awaiter(this, void 0, void 0, function* () {
         newsletter = new newsletter_1.default();
         const dbContext = yield databaseContext_1.default.getInstance();
-        let list = yield dbContext.getMessageList(currentUser.id);
-        let count = yield dbContext.messages.countDocuments({ user_id: currentUser.id });
-        let keyboard = [];
-        let row = [];
-        for (let i = 0; i < count; i++) {
-            if (i % 3 == 0) {
-                keyboard.push(row);
-                row = [];
+        //Строковый енам не поддерживает реверс маппинг(
+        for (const property of [newsletter_1.NewsletterProperty.Messages, newsletter_1.NewsletterProperty.Bots, newsletter_1.NewsletterProperty.Receivers]) {
+            let list = "Not found";
+            let count = 0;
+            switch (property) {
+                case newsletter_1.NewsletterProperty.Messages:
+                    list = yield dbContext.getMessageList(currentUser.id);
+                    //можно было бы обращаться к dbContext.messages/bots/receivers через NewsletterProperty как в обработчике callback_query ниже,
+                    //но тогда NewsletterProperty было бы уже и DatabaseContextProperty. Сокращается две строчки но вносится лишняя зависимость.
+                    count = yield dbContext.messages.countDocuments({ user_id: currentUser.id });
+                    break;
+                case newsletter_1.NewsletterProperty.Bots:
+                    list = yield dbContext.getBotList(currentUser.id);
+                    count = yield dbContext.bots.countDocuments({ user_id: currentUser.id });
+                    break;
+                case newsletter_1.NewsletterProperty.Receivers:
+                    list = yield dbContext.getRecieverList(currentUser.id);
+                    count = yield dbContext.receivers.countDocuments({ user_id: currentUser.id });
+                    break;
             }
-            row.push({ text: (i + 1).toString(), callback_data: 'm' + i });
+            yield bot.sendMessage(currentUser.id, list, {
+                reply_markup: {
+                    inline_keyboard: (0, utils_1.createInlineKeyboard)(count, 3, property)
+                }
+            });
         }
-        if (row.length > 0) {
-            keyboard.push(row);
-        }
-        yield bot.sendMessage(currentUser.id, list, {
-            reply_markup: {
-                inline_keyboard: keyboard
-            }
-        });
-        list = yield dbContext.getBotList(currentUser.id);
-        count = yield dbContext.bots.countDocuments({ user_id: currentUser.id });
-        keyboard = [];
-        row = [];
-        for (let i = 0; i < count; i++) {
-            if (i % 3 == 0) {
-                keyboard.push(row);
-                row = [];
-            }
-            row.push({ text: (i + 1).toString(), callback_data: 'b' + i });
-        }
-        if (row.length > 0) {
-            keyboard.push(row);
-        }
-        yield bot.sendMessage(currentUser.id, list, {
-            reply_markup: {
-                inline_keyboard: keyboard
-            }
-        });
-        list = yield dbContext.getRecieverList(currentUser.id);
-        count = yield dbContext.recievers.countDocuments({ user_id: currentUser.id });
-        keyboard = [];
-        row = [];
-        for (let i = 0; i < count; i++) {
-            if (i % 3 == 0) {
-                keyboard.push(row);
-                row = [];
-            }
-            row.push({ text: (i + 1).toString(), callback_data: 'r' + i });
-        }
-        if (row.length > 0) {
-            keyboard.push(row);
-        }
-        yield bot.sendMessage(currentUser.id, list, {
-            reply_markup: {
-                inline_keyboard: keyboard
-            }
-        });
     });
 }
 bot.on('callback_query', (ctx) => __awaiter(void 0, void 0, void 0, function* () {
-    const data = ctx.data;
-    if (data == undefined)
+    if (ctx.data == undefined)
         return;
-    if (data.charAt(0) == 'm') {
-        newsletter.messages.push(Number.parseInt(data.substring(1)));
-    }
-    else if (data.charAt(0) == 'b') {
-        newsletter.bots.push(Number.parseInt(data.substring(1)));
-    }
-    else if (data.charAt(0) == 'r') {
-        newsletter.recievers.push(Number.parseInt(data.substring(1)));
-    }
+    const keyboardData = (0, utils_1.parseKeyboardCallback)(ctx.data);
+    newsletter[keyboardData.property].push(keyboardData.buttonIndex);
 }));
 function onSendNewsletter() {
     return __awaiter(this, void 0, void 0, function* () {
@@ -303,7 +296,7 @@ function onSendNewsletter() {
         const dbContext = yield databaseContext_1.default.getInstance();
         const messages = yield dbContext.messages.find({ user_id: currentUser.id }).toArray();
         const bots = yield dbContext.bots.find({ user_id: currentUser.id }).toArray();
-        const recievers = yield dbContext.recievers.find({ user_id: currentUser.id }).toArray();
+        const recievers = yield dbContext.receivers.find({ user_id: currentUser.id }).toArray();
         newsletter.messages.forEach((messageInd) => __awaiter(this, void 0, void 0, function* () {
             const messageDoc = messages[messageInd];
             const imgIds = messageDoc["img_id"];
@@ -315,18 +308,18 @@ function onSendNewsletter() {
             newsletter.bots.forEach((botInd) => __awaiter(this, void 0, void 0, function* () {
                 const botToken = bots[botInd]["token"];
                 const helperBot = new node_telegram_bot_api_1.default(botToken);
-                newsletter.recievers.forEach((recieverInd) => __awaiter(this, void 0, void 0, function* () {
+                newsletter.receivers.forEach((recieverInd) => __awaiter(this, void 0, void 0, function* () {
                     const fileId = recievers[recieverInd]["csv_file_id"];
                     const file = yield bot.getFile(fileId);
-                    const url = `https://api.telegram.org/file/bot${process.env.API_TOKEN}/${file.file_path}`;
-                    const fileContent = (yield getResource(url)).toString("utf8");
+                    const url = `${baseBotUrl}${process.env.API_TOKEN}/${file.file_path}`;
+                    const fileContent = (yield (0, utils_1.getResource)(url)).toString("utf8");
                     const userIds = fileContent.split(",");
                     userIds.forEach((userId) => __awaiter(this, void 0, void 0, function* () {
                         if (imgIds != null) {
                             const imgFiles = yield Promise.all(imgIds.map((id) => __awaiter(this, void 0, void 0, function* () { return yield bot.getFile(id); })));
                             const responses = yield Promise.all(imgFiles.map((file) => __awaiter(this, void 0, void 0, function* () {
-                                const url = `https://api.telegram.org/file/bot${process.env.API_TOKEN}/${file.file_path}`;
-                                return yield getResource(url);
+                                const url = `${baseBotUrl}${process.env.API_TOKEN}/${file.file_path}`;
+                                return yield (0, utils_1.getResource)(url);
                             })));
                             const media = [];
                             responses.forEach(response => {
@@ -359,22 +352,5 @@ function onSendNewsletter() {
             }));
         }));
         bot.sendMessage(currentUser.id, "Newsletter sended!");
-    });
-}
-function getResource(url) {
-    return __awaiter(this, void 0, void 0, function* () {
-        return new Promise((resolve, reject) => {
-            https_1.default.get(url, (response) => {
-                const chunks = [];
-                response.on("data", (chunk) => {
-                    chunks.push(chunk);
-                });
-                response.on("end", () => {
-                    resolve(Buffer.concat(chunks));
-                });
-            }).on("error", (error) => {
-                reject(error);
-            });
-        });
     });
 }

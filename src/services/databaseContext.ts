@@ -1,16 +1,18 @@
 import TelegramBot from "node-telegram-bot-api";
-import { Collection, MongoClient } from "mongodb";
+import { Collection, MongoClient, WithId } from "mongodb";
 import { ServerApiVersion } from 'mongodb';
+import Message from "../models/message";
 
 
 export default class DatabaseContext {
     private static instance: DatabaseContext;
     private client!: MongoClient;
+    private subjectFromBodyLength = 30;
 
     public users!: Collection;
     public messages!: Collection;
     public bots!: Collection;
-    public recievers!: Collection;
+    public receivers!: Collection;
 
 
     private constructor() { }
@@ -38,7 +40,7 @@ export default class DatabaseContext {
         this.users = db.collection("users");
         this.messages = db.collection("messages");
         this.bots = db.collection("bots");
-        this.recievers = db.collection("recievers");
+        this.receivers = db.collection("recievers");
     }
 
     public async close(): Promise<void> {
@@ -46,45 +48,41 @@ export default class DatabaseContext {
     }
 
     public async getMessageList(userId: number): Promise<string> {
-        const userMessages = await this.messages.find({ user_id: userId }).toArray();
+        const userMessages = this.messages.find({ user_id: userId });
 
+        let ind = 0;
         let resultList = "Your saved messages:";
-        for (let ind = 0; ind < userMessages.length; ind++) {
-            let message = userMessages[ind];
-            if (message!["subject"] != null) {
-                resultList += `\n${ind + 1}. ${message!["subject"]}`;
-            }
-            else if (message!["body"] != null) {
-                resultList += `\n${ind + 1}. ${message!["body"].substring(0, 30)}`;
-            }
-            else {
-                resultList += `\n${ind + 1}. EmptyMessage`;
-            }
+        for await (const message of userMessages) {
+            resultList += this.createMessageListEntry(ind, message as unknown as Message);
+            ++ind;
         }
 
         return resultList;
     }
 
     public async getBotList(userId: number): Promise<string> {
-        const tokens = await this.bots.find({ user_id: userId }).toArray();
+        const userTokens = this.bots.find({ user_id: userId });
 
+        let ind = 0;
         let resultList = "Your saved bots:";
-        for (let ind = 0; ind < tokens.length; ind++) {
-            const userBot = new TelegramBot(tokens[ind]["token"]);
+        for await (const token of userTokens) {
+            const userBot = new TelegramBot(token["token"]);
             const botName = (await userBot.getMe()).username;
             resultList += `\n${ind + 1}. ${botName ?? "Unavailable"}`;
+            ++ind;
         }
     
         return resultList;
     }
 
     public async getRecieverList(userId: number): Promise<string> {
-        const recievers = await this.recievers.find({ user_id: userId }).toArray();
+        const userRecievers = this.receivers.find({ user_id: userId });
 
+        let ind = 0;
         let resultList = "Your saved recievers:";
-        for (let ind = 0; ind < recievers.length; ind++) {
-
-            resultList += `\n${ind + 1}. ${recievers[ind]["caption"] ?? `Unnamed list ${ind + 1}`}`;
+        for await (const recievers of userRecievers) {
+            resultList += `\n${ind + 1}. ${recievers["caption"] ?? `Unnamed list ${ind + 1}`}`;
+            ++ind;
         }
     
         return resultList;
@@ -95,5 +93,20 @@ export default class DatabaseContext {
         while (await collection.countDocuments({ user_id: userId }) > +maxCount) {
             collection.deleteOne({ user_id: userId });
         }
+    }
+
+    private createMessageListEntry(ind: number, message: Message) {  
+        let entry: string;      
+        if (message["subject"]) {
+            entry = `\n${ind + 1}. ${message!["subject"]}`;
+        }
+        else if (message!["body"] != null) {
+            entry = `\n${ind + 1}. ${message!["body"].substring(0, this.subjectFromBodyLength)}...`;
+        }
+        else {
+            entry = `\n${ind + 1}. EmptyMessage`;
+        }
+
+        return entry;
     }
 }
