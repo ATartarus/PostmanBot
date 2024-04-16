@@ -55,11 +55,15 @@ export default class DatabaseContext {
                 resultList += `\n${ind + 1}. ${message!["subject"]}`;
             }
             else if (message!["body"] != null) {
-                resultList += `\n${ind + 1}. ${message!["body"].substring(0, 30)}`;
+                resultList += `\n${ind + 1}. ${message!["body"].substring(0, 30)}`; // что значит 30? тоже вынести надо и дать название
             }
             else {
                 resultList += `\n${ind + 1}. EmptyMessage`;
             }
+            // resultList += `\n${ind + 1}. ${message!["subject"]}`;
+            // resultList += `\n${ind + 1}. ${message!["body"].substring(0, 30)}`;
+            // resultList += `\n${ind + 1}. EmptyMessage`;
+            // можно вынести в отдельную функцию и передвать параметры, переиспользуя одну функцию
         }
 
         return resultList;
@@ -67,6 +71,7 @@ export default class DatabaseContext {
 
     public async getBotList(userId: number): Promise<string> {
         const tokens = await this.bots.find({ user_id: userId }).toArray();
+        // не уверен что тут надо делать toArray вроде моджно просто foreach пройтись по листу
 
         let resultList = "Your saved bots:";
         for (let ind = 0; ind < tokens.length; ind++) {
@@ -80,7 +85,7 @@ export default class DatabaseContext {
 
     public async getRecieverList(userId: number): Promise<string> {
         const recievers = await this.recievers.find({ user_id: userId }).toArray();
-
+        // тут тоже самое toArray старайся всязга использваоть map filter foreach
         let resultList = "Your saved recievers:";
         for (let ind = 0; ind < recievers.length; ind++) {
 

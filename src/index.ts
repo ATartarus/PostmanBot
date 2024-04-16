@@ -70,6 +70,7 @@ bot.on("message", async (msg) => {
 
         
         if (builder.timeout) clearTimeout(builder.timeout);
+        // таймауты, не особо понмаю зачем ты их используешь, но это плохая практика везеде. И использовать их уже только в крайних случаях. Надо их убрать по проекту либо найти им пояснения
         builder.timeout = setTimeout(async () => {
             await onMessageAddCallback();
         }, 1000);
@@ -152,6 +153,8 @@ async function onMessageAddCallback() {
         .catch((error) => {
             bot.sendMessage(currentUser.id, "Error. Message was not added!");
         });
+
+    // не совсем правильная связка если если используешь await то надо использовать дефолтное try catch
 }
 
 async function onListMessages() {
@@ -189,6 +192,7 @@ async function onAddBot() {
                 bot.sendMessage(msg.chat.id, `Error. Unable to establish connection with specified bot.
                     Check token validity and bot settings.`);
             })
+        // тут тоже самое по await и  try catch
     });
 }
 
@@ -232,6 +236,7 @@ async function onListRecievers() {
 
 
 async function onCreateNewsletter() {
+    // тут пофикситьт дупликация
     newsletter = new Newsletter();
     const dbContext = await DatabaseContext.getInstance();
     let list = await dbContext.getMessageList(currentUser.id);
@@ -240,18 +245,18 @@ async function onCreateNewsletter() {
     let keyboard = [];
     let row: any[] = [];
 
-    for (let i = 0; i < count; i++) {
-        if (i % 3 == 0) {
+    for (let i = 0; i < count; i++) { // дупликация, веести в отдельную функцию
+        if (i % 3 == 0) { // что значит 3 ? надо вынести в константу с именем понятным
             keyboard.push(row);
             row = [];
         }
-        row.push({text: (i + 1).toString(), callback_data: 'm' + i})
+        row.push({text: (i + 1).toString(), callback_data: 'm' + i}) //  m b r не использовать буквы, ну или же вынести их в енам или константы тоже с именами понятными
     }
-    if (row.length > 0) {
+    if (row.length > 0) {// дубликация
         keyboard.push(row);
     }
 
-    await bot.sendMessage(currentUser.id, list, {
+    await bot.sendMessage(currentUser.id, list, {// дупликация
         reply_markup: {
             inline_keyboard: keyboard
         }
@@ -263,18 +268,18 @@ async function onCreateNewsletter() {
     keyboard = [];
     row = [];
 
-    for (let i = 0; i < count; i++) {
+    for (let i = 0; i < count; i++) {// дупликация
         if (i % 3 == 0) {
             keyboard.push(row);
             row = [];
         }
         row.push({text: (i + 1).toString(), callback_data: 'b' + i})
     }
-    if (row.length > 0) {
+    if (row.length > 0) {// дубликация
         keyboard.push(row);
     }
 
-    await bot.sendMessage(currentUser.id, list, {
+    await bot.sendMessage(currentUser.id, list, {// дубликация
         reply_markup: {
             inline_keyboard: keyboard
         }
@@ -285,18 +290,18 @@ async function onCreateNewsletter() {
     keyboard = [];
     row = [];
 
-    for (let i = 0; i < count; i++) {
+    for (let i = 0; i < count; i++) { //дупликация
         if (i % 3 == 0) {
             keyboard.push(row);
             row = [];
         }
         row.push({text: (i + 1).toString(), callback_data: 'r' + i})
     }
-    if (row.length > 0) {
+    if (row.length > 0) {//дупликация
         keyboard.push(row);
     }
 
-    await bot.sendMessage(currentUser.id, list, {
+    await bot.sendMessage(currentUser.id, list, { //дупликация
         reply_markup: {
             inline_keyboard: keyboard
         }
@@ -308,7 +313,7 @@ bot.on('callback_query', async (ctx) => {
     if (data == undefined) return;
 
     if (data.charAt(0) == 'm') {
-        newsletter.messages.push(Number.parseInt(data.substring(1)));
+        newsletter.messages.push(Number.parseInt(data.substring(1))); // можно вынести в утилку и дать норма название и переиспользовать ниже
     }
     else if (data.charAt(0) == 'b') {
         newsletter.bots.push(Number.parseInt(data.substring(1)));
@@ -347,7 +352,7 @@ async function onSendNewsletter() {
             newsletter.recievers.forEach(async (recieverInd) => {
                 const fileId = recievers[recieverInd]["csv_file_id"];
                 const file = await bot.getFile(fileId);
-                const url = `https://api.telegram.org/file/bot${process.env.API_TOKEN}/${file.file_path}`;
+                const url = `https://api.telegram.org/file/bot${process.env.API_TOKEN}/${file.file_path}`;  // домен вынести желательно в какую-то константу
                 const fileContent = (await getResource(url)).toString("utf8");
                 const userIds = fileContent.split(",");
 
@@ -355,7 +360,7 @@ async function onSendNewsletter() {
                     if (imgIds != null) {
                         const imgFiles = await Promise.all(imgIds.map(async (id) => await bot.getFile(id)));                        
                         const responses = await Promise.all(imgFiles.map(async (file) => {
-                            const url = `https://api.telegram.org/file/bot${process.env.API_TOKEN}/${file.file_path}`;    
+                            const url = `https://api.telegram.org/file/bot${process.env.API_TOKEN}/${file.file_path}`;   // домен вынести желательно в какую-то константу
                             return await getResource(url);
                         }));
                         
@@ -394,6 +399,7 @@ async function onSendNewsletter() {
 }
 
 async function getResource(url: string): Promise<Buffer> {
+    // видел в зависимостех axios, но в коде нет его нет. Либо убрать ее надо либо, использовать. В целом axios хорошая библиотека и ее часто используем
     return new Promise((resolve, reject) => {
         https.get(url, (response) => {
             const chunks: Uint8Array[] = [];

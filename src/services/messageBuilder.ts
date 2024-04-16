@@ -3,7 +3,7 @@ import Message from "../models/message";
 export default class MessageBuilder {
     private static instance: MessageBuilder;
     private buildingMessage: Message | undefined;
-    public timeout: NodeJS.Timeout | undefined;
+    public timeout: NodeJS.Timeout | undefined; // таймаут, в index.ts про это отдельно
 
     private constructor() {}
 
