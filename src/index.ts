@@ -18,15 +18,15 @@ const awaitingList: number[] = [];
 
 const bot = new TelegramBot(
     process.env.API_TOKEN!,
-    //{ webHook: { port: +process.env.PORT! } }
-    { polling: {
-        interval: 300,
-        autoStart: true
-      }}
+    { webHook: { port: +process.env.PORT! } }
+    // { polling: {
+    //     interval: 300,
+    //     autoStart: true
+    //   }}
 );
 
-bot.on("polling_error", err => console.log(err.message));
-//bot.setWebHook(`${process.env.APP_URL}/bot${process.env.API_TOKEN}`);
+//bot.on("polling_error", err => console.log(err.message));
+bot.setWebHook(`${process.env.APP_URL}/bot${process.env.API_TOKEN}`);
 
 bot.setMyCommands(commands);
 
