@@ -2,6 +2,7 @@ import TelegramBot from "node-telegram-bot-api";
 import { Collection, MongoClient, WithId } from "mongodb";
 import { ServerApiVersion } from 'mongodb';
 import Message from "../models/message";
+import User from "../models/user";
 
 
 export default class DatabaseContext {
@@ -40,7 +41,7 @@ export default class DatabaseContext {
         this.users = db.collection("users");
         this.messages = db.collection("messages");
         this.bots = db.collection("bots");
-        this.receivers = db.collection("recievers");
+        this.receivers = db.collection("receivers");
     }
 
     public async close(): Promise<void> {
@@ -75,12 +76,12 @@ export default class DatabaseContext {
         return resultList;
     }
 
-    public async getRecieverList(userId: number): Promise<string> {
-        const userRecievers = this.receivers.find({ user_id: userId });
+    public async getReceiverList(userId: number): Promise<string> {
+        const userReceivers = this.receivers.find({ user_id: userId });
 
         let ind = 0;
         let resultList = "Your saved recievers:";
-        for await (const recievers of userRecievers) {
+        for await (const recievers of userReceivers) {
             resultList += `\n${ind + 1}. ${recievers["caption"] ?? `Unnamed list ${ind + 1}`}`;
             ++ind;
         }
@@ -90,7 +91,8 @@ export default class DatabaseContext {
 
     public async validateCollectionSize(collection: Collection, userId: number) {
         const maxCount = process.env.MAX_COLLECTION_DOCUMENTS || 9
-        while (await collection.countDocuments({ user_id: userId }) > +maxCount) {
+        let countDocuments = await collection.countDocuments({ user_id: userId });
+        while (countDocuments--  > +maxCount) {
             collection.deleteOne({ user_id: userId });
         }
     }
@@ -108,5 +110,53 @@ export default class DatabaseContext {
         }
 
         return entry;
+    }
+
+    /**
+     * Validates user by trying to find his id in the database and if not found adding new entry.
+     * @param user - user to validate.
+     * @returns object { passed: boolean; message: string}.
+     * passed: true if user exists/added, false otherwise.
+     * message: message with error or success string.
+     */
+    public async validateUser(user: User) {
+        const dbContext = await DatabaseContext.getInstance();
+        let result: { passed: boolean; message: string};
+
+        try {
+            const exists = await dbContext.users.findOne({ id: user.id });
+    
+            if (exists) {
+                result = {
+                    passed: true,
+                    message: "<i>User already exists, bot is ready!</i>"
+                };
+            }
+            else {
+                try {
+                    await dbContext.users.insertOne(user);
+                    result = {
+                        passed: true,
+                        message: "<i>User " + (user.username == undefined
+                            ? `with id ${user.id}`
+                            : `${user.username}`)
+                            + " has been recorded. Bot is ready!</i>"
+                    };
+                } catch (error) {
+                    result = {
+                        passed: false,
+                        message: "<i>Unable to add user!</i>"
+                    };
+                }
+            }
+        } catch(error) {
+            result = {
+                passed: false,
+                message: "<i>Error occured. Try again</i>"
+            }
+            console.error(error);
+        }
+
+        return result;
     }
 }

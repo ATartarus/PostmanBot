@@ -12,7 +12,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.getResource = exports.createInlineKeyboard = exports.parseKeyboardCallback = void 0;
+exports.removeFromArray = exports.getResource = exports.createInlineKeyboard = exports.parseKeyboardCallback = void 0;
 const https_1 = __importDefault(require("https"));
 /**
  * Retrieves newsletter property associated with keyboard and index of pressed button from string.
@@ -61,3 +61,11 @@ function getResource(url) {
     });
 }
 exports.getResource = getResource;
+function removeFromArray(arr, elem) {
+    let ind = arr.indexOf(elem);
+    while (ind != -1) {
+        arr.splice(ind, 1);
+        ind = arr.indexOf(elem);
+    }
+}
+exports.removeFromArray = removeFromArray;

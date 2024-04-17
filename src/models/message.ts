@@ -5,4 +5,8 @@ export default class Message {
         public subject?: string,
         public img_id?: string[]
     ) {}
+
+    public isEmpty() {
+        return !this.body && !this.subject && !this.img_id;
+    }
 }

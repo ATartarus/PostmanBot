@@ -1,4 +1,7 @@
+import TelegramBot from "node-telegram-bot-api";
 import { NewsletterProperty } from "./newsletter";
+import User from "./models/user";
+import DatabaseContext from "./services/databaseContext";
 import https from "https";
 
 /**
@@ -46,4 +49,12 @@ export async function getResource(url: string): Promise<Buffer> {
             reject(error);
         })
     });
+}
+
+export function removeFromArray(arr: any[], elem: any) {
+    let ind = arr.indexOf(elem);
+    while (ind != -1) {
+        arr.splice(ind, 1);
+        ind = arr.indexOf(elem);
+    }
 }

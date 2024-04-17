@@ -49,7 +49,7 @@ class DatabaseContext {
             this.users = db.collection("users");
             this.messages = db.collection("messages");
             this.bots = db.collection("bots");
-            this.receivers = db.collection("recievers");
+            this.receivers = db.collection("receivers");
         });
     }
     close() {
@@ -109,16 +109,16 @@ class DatabaseContext {
             return resultList;
         });
     }
-    getRecieverList(userId) {
+    getReceiverList(userId) {
         return __awaiter(this, void 0, void 0, function* () {
             var _a, e_3, _b, _c;
             var _d;
-            const userRecievers = this.receivers.find({ user_id: userId });
+            const userReceivers = this.receivers.find({ user_id: userId });
             let ind = 0;
             let resultList = "Your saved recievers:";
             try {
-                for (var _e = true, userRecievers_1 = __asyncValues(userRecievers), userRecievers_1_1; userRecievers_1_1 = yield userRecievers_1.next(), _a = userRecievers_1_1.done, !_a; _e = true) {
-                    _c = userRecievers_1_1.value;
+                for (var _e = true, userReceivers_1 = __asyncValues(userReceivers), userReceivers_1_1; userReceivers_1_1 = yield userReceivers_1.next(), _a = userReceivers_1_1.done, !_a; _e = true) {
+                    _c = userReceivers_1_1.value;
                     _e = false;
                     const recievers = _c;
                     resultList += `\n${ind + 1}. ${(_d = recievers["caption"]) !== null && _d !== void 0 ? _d : `Unnamed list ${ind + 1}`}`;
@@ -128,7 +128,7 @@ class DatabaseContext {
             catch (e_3_1) { e_3 = { error: e_3_1 }; }
             finally {
                 try {
-                    if (!_e && !_a && (_b = userRecievers_1.return)) yield _b.call(userRecievers_1);
+                    if (!_e && !_a && (_b = userReceivers_1.return)) yield _b.call(userReceivers_1);
                 }
                 finally { if (e_3) throw e_3.error; }
             }
@@ -138,7 +138,8 @@ class DatabaseContext {
     validateCollectionSize(collection, userId) {
         return __awaiter(this, void 0, void 0, function* () {
             const maxCount = process.env.MAX_COLLECTION_DOCUMENTS || 9;
-            while ((yield collection.countDocuments({ user_id: userId })) > +maxCount) {
+            let countDocuments = yield collection.countDocuments({ user_id: userId });
+            while (countDocuments-- > +maxCount) {
                 collection.deleteOne({ user_id: userId });
             }
         });
@@ -155,6 +156,54 @@ class DatabaseContext {
             entry = `\n${ind + 1}. EmptyMessage`;
         }
         return entry;
+    }
+    /**
+     * Validates user by trying to find his id in the database and if not found adding new entry.
+     * @param user - user to validate.
+     * @returns object { passed: boolean; message: string}.
+     * passed: true if user exists/added, false otherwise.
+     * message: message with error or success string.
+     */
+    validateUser(user) {
+        return __awaiter(this, void 0, void 0, function* () {
+            const dbContext = yield DatabaseContext.getInstance();
+            let result;
+            try {
+                const exists = yield dbContext.users.findOne({ id: user.id });
+                if (exists) {
+                    result = {
+                        passed: true,
+                        message: "<i>User already exists, bot is ready!</i>"
+                    };
+                }
+                else {
+                    try {
+                        yield dbContext.users.insertOne(user);
+                        result = {
+                            passed: true,
+                            message: "<i>User " + (user.username == undefined
+                                ? `with id ${user.id}`
+                                : `${user.username}`)
+                                + " has been recorded. Bot is ready!</i>"
+                        };
+                    }
+                    catch (error) {
+                        result = {
+                            passed: false,
+                            message: "<i>Unable to add user!</i>"
+                        };
+                    }
+                }
+            }
+            catch (error) {
+                result = {
+                    passed: false,
+                    message: "<i>Error occured. Try again</i>"
+                };
+                console.error(error);
+            }
+            return result;
+        });
     }
 }
 exports.default = DatabaseContext;

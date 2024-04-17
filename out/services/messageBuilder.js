@@ -3,24 +3,18 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
+exports.fillMessageBuilder = exports.messageAwaitTime = exports.messageBuilderPool = void 0;
 const message_1 = __importDefault(require("../models/message"));
+exports.messageBuilderPool = [];
+//Таймер отправки последнего сообщения в группе
+exports.messageAwaitTime = 1000;
 class MessageBuilder {
-    constructor() { }
-    static getInstance() {
-        if (!this.instance) {
-            this.instance = new MessageBuilder();
-        }
-        return this.instance;
-    }
-    init(userId) {
+    constructor(userId) {
         this.buildingMessage = new message_1.default(userId);
     }
-    close() {
-        this.buildingMessage = undefined;
-        clearTimeout(this.timeout);
-    }
-    isActive() {
-        return this.buildingMessage != undefined;
+    getUserId() {
+        var _a;
+        return (_a = this.buildingMessage) === null || _a === void 0 ? void 0 : _a.user_id;
     }
     appendImageId(imageId) {
         if (!this.buildingMessage)
@@ -45,3 +39,28 @@ class MessageBuilder {
     }
 }
 exports.default = MessageBuilder;
+function fillMessageBuilder(builder, msg) {
+    if (msg.photo) {
+        builder.appendImageId(msg.photo[msg.photo.length - 1].file_id);
+    }
+    let messageBody = "";
+    if (msg.text) {
+        messageBody = msg.text;
+    }
+    else if (msg.caption) {
+        messageBody = msg.caption;
+    }
+    if (messageBody && messageBody.charAt(0) == '*') {
+        let end = messageBody.indexOf('*', 1);
+        if (end) {
+            builder.appendSubject(messageBody.substring(1, end));
+            while (messageBody.charAt(++end) == '\n')
+                ;
+            messageBody = messageBody.substring(end);
+        }
+    }
+    if (messageBody) {
+        builder.appendBody(messageBody);
+    }
+}
+exports.fillMessageBuilder = fillMessageBuilder;

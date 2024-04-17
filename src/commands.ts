@@ -12,8 +12,8 @@ const commands = [
         description: "Add new bot for newsletter via token"
     },
     {
-        command: "add_recievers",
-        description: "Add new list of message recievers"
+        command: "add_receivers",
+        description: "Add new list of message receivers"
     },
     {
         command: "list_messages",
@@ -24,8 +24,8 @@ const commands = [
         description: "List all saved bots"
     },
     {
-        command: "list_recievers",
-        description: "List all saved recievers"
+        command: "list_receivers",
+        description: "List all saved receivers"
     },
     {
         command: "create_newsletter",
@@ -38,3 +38,17 @@ const commands = [
 ];
 
 export default commands;
+
+export function textIsCommand(text: string | undefined) {
+    if (!text) return false;
+    
+    let textIsCommand = false;
+    commands.forEach((command) => {
+        if (`/${command.command}` == text) {
+            textIsCommand = true;
+            return;
+        }
+    });
+
+    return textIsCommand;
+}

@@ -1,31 +1,20 @@
+import TelegramBot from "node-telegram-bot-api";
 import Message from "../models/message";
 
+export const messageBuilderPool: MessageBuilder[] = []
+//Таймер отправки последнего сообщения в группе
+export const messageAwaitTime = 1000;
+
 export default class MessageBuilder {
-    private static instance: MessageBuilder;
-    private buildingMessage: Message | undefined;
+    private buildingMessage: Message;
     public timeout: NodeJS.Timeout | undefined; 
 
-    private constructor() {}
-
-    public static getInstance(): MessageBuilder {
-        if (!this.instance) {
-            this.instance = new MessageBuilder();
-        }
-
-        return this.instance;
-    }
-
-    public init(userId: number) {
+    public constructor(userId: number) {
         this.buildingMessage = new Message(userId);
     }
-
-    public close() {
-        this.buildingMessage = undefined;
-        clearTimeout(this.timeout);
-    }
-
-    public isActive() {
-        return this.buildingMessage != undefined;
+    
+    public getUserId() {
+        return this.buildingMessage?.user_id;
     }
 
     public appendImageId(imageId: string) {
@@ -50,7 +39,33 @@ export default class MessageBuilder {
         this.buildingMessage.body = body;
     }
 
-    public getMessage(): Message | undefined {
+    public getMessage(): Message {
         return this.buildingMessage;
+    }
+}
+
+export function fillMessageBuilder(builder: MessageBuilder, msg: TelegramBot.Message) {
+    if (msg.photo) {
+        builder.appendImageId(msg.photo[msg.photo.length - 1].file_id);
+    }
+    
+    let messageBody = "";
+    if (msg.text) {
+        messageBody = msg.text;
+    }
+    else if (msg.caption) {
+        messageBody = msg.caption;
+    }
+    if (messageBody && messageBody.charAt(0) == '*') {
+        let end = messageBody.indexOf('*', 1);
+        if (end) {
+            builder.appendSubject(messageBody.substring(1, end));
+            while(messageBody.charAt(++end) == '\n');
+            messageBody = messageBody.substring(end);
+        }
+    }
+
+    if (messageBody) {
+        builder.appendBody(messageBody);
     }
 }

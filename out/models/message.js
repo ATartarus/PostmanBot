@@ -7,5 +7,8 @@ class Message {
         this.subject = subject;
         this.img_id = img_id;
     }
+    isEmpty() {
+        return !this.body && !this.subject && !this.img_id;
+    }
 }
 exports.default = Message;
