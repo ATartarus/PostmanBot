@@ -61,11 +61,13 @@ function getResource(url) {
     });
 }
 exports.getResource = getResource;
-function removeFromArray(arr, elem) {
-    let ind = arr.indexOf(elem);
+function removeFromArray(arr, option) {
+    const isFunc = typeof option === "function";
+    let ind = isFunc ? arr.findIndex(option) : arr.indexOf(option);
     while (ind != -1) {
         arr.splice(ind, 1);
-        ind = arr.indexOf(elem);
+        ind = isFunc ? arr.findIndex(option) : arr.indexOf(option);
     }
 }
 exports.removeFromArray = removeFromArray;
+//# sourceMappingURL=utils.js.map

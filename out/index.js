@@ -245,22 +245,22 @@ function onListReceivers(msg) {
  */
 function onCreateNewsletter(msg) {
     return __awaiter(this, void 0, void 0, function* () {
-        newsletter_1.newsletterPool.push(new newsletter_1.default(msg.from.id));
+        newsletter_1.newsletterPool.set(msg.from.id, new newsletter_1.default(msg.from.id));
         const dbContext = yield databaseContext_1.default.getInstance();
         //Строковый енам не поддерживает реверс маппинг(
-        for (const property of [newsletter_1.NewsletterProperty.Messages, newsletter_1.NewsletterProperty.Bots, newsletter_1.NewsletterProperty.Receivers]) {
+        for (const property of [newsletter_1.NewsletterProperty.Bots, newsletter_1.NewsletterProperty.Messages, newsletter_1.NewsletterProperty.Receivers]) {
             let list = "Not found";
             let count = 0;
             switch (property) {
-                case newsletter_1.NewsletterProperty.Messages:
-                    list = yield dbContext.getMessageList(msg.from.id);
-                    //можно было бы обращаться к dbContext.messages/bots/receivers через NewsletterProperty как в обработчике callback_query ниже,
-                    //но тогда NewsletterProperty было бы уже и DatabaseContextProperty. Сокращается две строчки но вносится лишняя зависимость.
-                    count = yield dbContext.messages.countDocuments({ user_id: msg.from.id });
-                    break;
                 case newsletter_1.NewsletterProperty.Bots:
                     list = yield dbContext.getBotList(msg.from.id);
+                    //можно было бы обращаться к dbContext.messages/bots/receivers через NewsletterProperty как в обработчике callback_query ниже,
+                    //но тогда NewsletterProperty было бы уже и DatabaseContextProperty. Сокращается две строчки но вносится лишняя зависимость.
                     count = yield dbContext.bots.countDocuments({ user_id: msg.from.id });
+                    break;
+                case newsletter_1.NewsletterProperty.Messages:
+                    list = yield dbContext.getMessageList(msg.from.id);
+                    count = yield dbContext.messages.countDocuments({ user_id: msg.from.id });
                     break;
                 case newsletter_1.NewsletterProperty.Receivers:
                     list = yield dbContext.getReceiverList(msg.from.id);
@@ -279,12 +279,12 @@ bot.on('callback_query', (ctx) => __awaiter(void 0, void 0, void 0, function* ()
     if (ctx.data == undefined)
         return;
     const keyboardData = (0, utils_1.parseKeyboardCallback)(ctx.data);
-    const newsletter = newsletter_1.newsletterPool.find((obj) => obj.getUserId() == ctx.from.id);
+    const newsletter = newsletter_1.newsletterPool.get(ctx.from.id);
     if (!newsletter) {
         console.log("Could not find newsletter in the pool with userid = ", ctx.from.id);
     }
     else {
-        newsletter[keyboardData.property].push(keyboardData.buttonIndex);
+        newsletter[keyboardData.property].add(keyboardData.buttonIndex);
     }
 }));
 /**
@@ -293,7 +293,7 @@ bot.on('callback_query', (ctx) => __awaiter(void 0, void 0, void 0, function* ()
  */
 function onSendNewsletter(msg) {
     return __awaiter(this, void 0, void 0, function* () {
-        const newsletter = newsletter_1.newsletterPool.find((obj) => obj.getUserId() == msg.from.id);
+        const newsletter = newsletter_1.newsletterPool.get(msg.from.id);
         if (!newsletter) {
             bot.sendMessage(msg.chat.id, "You must create newsletter with create_newsletter command");
             return;
@@ -306,63 +306,82 @@ function onSendNewsletter(msg) {
         const messages = yield dbContext.messages.find({ user_id: msg.from.id }).toArray();
         const bots = yield dbContext.bots.find({ user_id: msg.from.id }).toArray();
         const recievers = yield dbContext.receivers.find({ user_id: msg.from.id }).toArray();
-        newsletter.messages.forEach((messageInd) => __awaiter(this, void 0, void 0, function* () {
-            const messageDoc = messages[messageInd];
-            const imgIds = messageDoc["img_id"];
-            let message = "";
-            if (messageDoc["subject"]) {
-                message += `<b>${messageDoc["subject"]}</b>\n\n`;
-            }
-            if (messageDoc["body"]) {
-                message += messageDoc["body"];
-            }
-            newsletter.bots.forEach((botInd) => __awaiter(this, void 0, void 0, function* () {
-                const botToken = bots[botInd]["token"];
-                const helperBot = new node_telegram_bot_api_1.default(botToken);
-                newsletter.receivers.forEach((recieverInd) => __awaiter(this, void 0, void 0, function* () {
-                    const fileId = recievers[recieverInd]["csv_file_id"];
+        const messagePromises = [];
+        for (const botInd of newsletter.bots) {
+            const botToken = bots[botInd]["token"];
+            const helperBot = new node_telegram_bot_api_1.default(botToken);
+            for (const messageInd of newsletter.messages) {
+                const messageDoc = messages[messageInd];
+                const imgIds = messageDoc["img_id"];
+                let message = "";
+                if (messageDoc["subject"]) {
+                    message += `<b>${messageDoc["subject"]}</b>\n\n`;
+                }
+                if (messageDoc["body"]) {
+                    message += messageDoc["body"];
+                }
+                for (const receiversListInd of newsletter.receivers) {
+                    const fileId = recievers[receiversListInd]["csv_file_id"];
                     const file = yield bot.getFile(fileId);
                     const url = `${baseBotUrl}${process.env.API_TOKEN}/${file.file_path}`;
                     const fileContent = (yield (0, utils_1.getResource)(url)).toString("utf8");
                     const userIds = fileContent.split(",");
-                    userIds.forEach((userId) => __awaiter(this, void 0, void 0, function* () {
-                        if (imgIds != null) {
+                    newsletter.addLogEntry(botInd, messageInd, receiversListInd, userIds.length);
+                    let userInd = 0;
+                    for (const userId of userIds) {
+                        let media;
+                        if (imgIds) {
+                            //TODO: change Promise.all to Promise.allSettled and handle image load error.
                             const imgFiles = yield Promise.all(imgIds.map((id) => __awaiter(this, void 0, void 0, function* () { return yield bot.getFile(id); })));
                             const responses = yield Promise.all(imgFiles.map((file) => __awaiter(this, void 0, void 0, function* () {
                                 const url = `${baseBotUrl}${process.env.API_TOKEN}/${file.file_path}`;
                                 return yield (0, utils_1.getResource)(url);
                             })));
-                            const media = [];
+                            media = [];
                             responses.forEach(response => {
                                 media.push({ type: 'photo', media: response });
                             });
                             media[0].caption = message;
                             media[0].parse_mode = "HTML";
-                            helperBot.sendMediaGroup(userId, media)
-                                .then((message) => {
-                                console.log("Message sent successfully", messageDoc._id);
+                        }
+                        let receiverInd = userInd;
+                        const messagePromise = new Promise((resolve, reject) => {
+                            let sendPromise;
+                            if (media) {
+                                sendPromise = helperBot.sendMediaGroup(userId, media);
+                            }
+                            else {
+                                sendPromise = helperBot.sendMessage(userId, message, {
+                                    parse_mode: "HTML"
+                                });
+                            }
+                            sendPromise
+                                .then(() => {
+                                newsletter.setLogResult(botInd, messageInd, receiversListInd, receiverInd, newsletter_1.NewsletterResult.Succeeded);
+                                (0, utils_1.removeFromArray)(messagePromises, messagePromise);
+                                resolve();
                             })
                                 .catch((error) => {
-                                console.log("Error. Message was not sent", messageDoc._id);
+                                newsletter.setLogResult(botInd, messageInd, receiversListInd, receiverInd, newsletter_1.NewsletterResult.Failed);
+                                (0, utils_1.removeFromArray)(messagePromises, messagePromise);
+                                reject(error);
                             });
-                        }
-                        else {
-                            helperBot.sendMessage(userId, message, {
-                                parse_mode: "HTML"
-                            })
-                                .then((message) => {
-                                console.log("Message sent successfully", messageDoc._id);
-                            })
-                                .catch((error) => {
-                                console.log("Error. Message was not sent", messageDoc._id);
-                            });
-                            ;
-                        }
-                    }));
-                }));
-            }));
-        }));
-        bot.sendMessage(msg.chat.id, "Newsletter sended!");
-        (0, utils_1.removeFromArray)(newsletter_1.newsletterPool, newsletter);
+                        });
+                        messagePromises.push(messagePromise);
+                        userInd++;
+                    }
+                }
+            }
+        }
+        yield Promise.allSettled(messagePromises);
+        const log = newsletter.getBriefLog();
+        bot.sendMessage(msg.chat.id, `<b>Newsletter sent!</b>\n
+        Total messages: ${log.total}
+        Sent successfully: ${log.success}
+        Failed to send: ${log.fail}`, {
+            parse_mode: "HTML"
+        });
+        newsletter_1.newsletterPool.delete(newsletter.getUserId());
     });
 }
+//# sourceMappingURL=index.js.map

@@ -12,3 +12,4 @@ class Message {
     }
 }
 exports.default = Message;
+//# sourceMappingURL=message.js.map

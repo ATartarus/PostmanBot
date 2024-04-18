@@ -4,24 +4,24 @@ const commands = [
         description: "Start work with bot"
     },
     {
-        command: "add_message",
-        description: "Add new message to newsletter"
-    },
-    {
         command: "add_bot",
         description: "Add new bot for newsletter via token"
+    },
+    {
+        command: "add_message",
+        description: "Add new message to newsletter"
     },
     {
         command: "add_receivers",
         description: "Add new list of message receivers"
     },
     {
-        command: "list_messages",
-        description: "List all saved messages"
-    },
-    {
         command: "list_bots",
         description: "List all saved bots"
+    },
+    {
+        command: "list_messages",
+        description: "List all saved messages"
     },
     {
         command: "list_receivers",

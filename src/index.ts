@@ -4,7 +4,7 @@ import DatabaseContext from "./services/databaseContext";
 import Token from "./models/bot";
 import User from "./models/user";
 import ReceiversList from "./models/receiversList";
-import Newsletter, { NewsletterProperty, newsletterPool } from "./newsletter";
+import Newsletter, { NewsletterProperty, NewsletterResult, newsletterPool } from "./newsletter";
 import MessageBuilder, { messageBuilderPool, messageAwaitTime, fillMessageBuilder } from "./services/messageBuilder";
 import commands, { textIsCommand } from "./commands";
 import { getResource, createInlineKeyboard, parseKeyboardCallback, removeFromArray } from "./utils";
@@ -228,24 +228,24 @@ async function onListReceivers(msg: TelegramBot.Message) {
  * Creates new Newsletter with user id and pushes it to the newsletter pool. 
  */
 async function onCreateNewsletter(msg: TelegramBot.Message) {
-    newsletterPool.push(new Newsletter(msg.from!.id));
+    newsletterPool.set(msg.from!.id, new Newsletter(msg.from!.id));
     const dbContext = await DatabaseContext.getInstance();
-
+    
     //Строковый енам не поддерживает реверс маппинг(
-    for (const property of [NewsletterProperty.Messages, NewsletterProperty.Bots, NewsletterProperty.Receivers]) {
+    for (const property of [NewsletterProperty.Bots, NewsletterProperty.Messages, NewsletterProperty.Receivers]) {
         let list = "Not found";
         let count = 0;
         
         switch (property) {
-            case NewsletterProperty.Messages:
-                list = await dbContext.getMessageList(msg.from!.id);
-                //можно было бы обращаться к dbContext.messages/bots/receivers через NewsletterProperty как в обработчике callback_query ниже,
-                //но тогда NewsletterProperty было бы уже и DatabaseContextProperty. Сокращается две строчки но вносится лишняя зависимость.
-                count = await dbContext.messages.countDocuments({ user_id: msg.from!.id });
-                break;
             case NewsletterProperty.Bots:
                 list = await dbContext.getBotList(msg.from!.id);
+                //можно было бы обращаться к dbContext.messages/bots/receivers через NewsletterProperty как в обработчике callback_query ниже,
+                //но тогда NewsletterProperty было бы уже и DatabaseContextProperty. Сокращается две строчки но вносится лишняя зависимость.
                 count = await dbContext.bots.countDocuments({ user_id: msg.from!.id });
+                break;
+            case NewsletterProperty.Messages:
+                list = await dbContext.getMessageList(msg.from!.id);
+                count = await dbContext.messages.countDocuments({ user_id: msg.from!.id });
                 break;
             case NewsletterProperty.Receivers:
                 list = await dbContext.getReceiverList(msg.from!.id);
@@ -266,13 +266,13 @@ bot.on('callback_query', async (ctx) => {
     if (ctx.data == undefined) return;
 
     const keyboardData = parseKeyboardCallback(ctx.data);
-    const newsletter = newsletterPool.find((obj) => obj.getUserId() == ctx.from!.id);
+    const newsletter = newsletterPool.get(ctx.from!.id);
 
     if (!newsletter) {
         console.log("Could not find newsletter in the pool with userid = ", ctx.from!.id);
     }
     else {
-        newsletter[keyboardData.property].push(keyboardData.buttonIndex);
+        newsletter[keyboardData.property].add(keyboardData.buttonIndex);
     }
 })
 
@@ -282,7 +282,7 @@ bot.on('callback_query', async (ctx) => {
  * Each message is sent by each bot to the each of users.
  */
 async function onSendNewsletter(msg: TelegramBot.Message) {
-    const newsletter = newsletterPool.find((obj) => obj.getUserId() == msg.from!.id);
+    const newsletter = newsletterPool.get(msg.from!.id);
     if (!newsletter) {
         bot.sendMessage(msg.chat.id, "You must create newsletter with create_newsletter command");
         return;
@@ -296,69 +296,97 @@ async function onSendNewsletter(msg: TelegramBot.Message) {
     const messages = await dbContext.messages.find({ user_id: msg.from!.id }).toArray();
     const bots = await dbContext.bots.find({ user_id: msg.from!.id }).toArray();
     const recievers = await dbContext.receivers.find({ user_id: msg.from!.id }).toArray();
+    const messagePromises: Promise<any>[] = [];
 
-    newsletter.messages.forEach(async (messageInd) => {
-        const messageDoc = messages[messageInd];
-        const imgIds: string[] = messageDoc["img_id"];
+    for (const botInd of newsletter.bots) {
+        const botToken = bots[botInd]["token"];
+        const helperBot = new TelegramBot(botToken);
 
-        let message = "";
-        if (messageDoc["subject"]) {
-            message += `<b>${messageDoc["subject"]}</b>\n\n`;
-        }
-        if (messageDoc["body"]) {
-            message += messageDoc["body"];
-        }
+        for (const messageInd of newsletter.messages) {
+            const messageDoc = messages[messageInd];
+            const imgIds: string[] = messageDoc["img_id"];
 
-        newsletter.bots.forEach(async (botInd) => {
-            const botToken = bots[botInd]["token"];
-            const helperBot = new TelegramBot(botToken);
+            let message = "";
+            if (messageDoc["subject"]) {
+                message += `<b>${messageDoc["subject"]}</b>\n\n`;
+            }
+            if (messageDoc["body"]) {
+                message += messageDoc["body"];
+            }
 
-            newsletter.receivers.forEach(async (recieverInd) => {
-                const fileId = recievers[recieverInd]["csv_file_id"];
+            for (const receiversListInd of newsletter.receivers) {
+                const fileId = recievers[receiversListInd]["csv_file_id"];
                 const file = await bot.getFile(fileId);
                 const url = `${baseBotUrl}${process.env.API_TOKEN}/${file.file_path}`;
                 const fileContent = (await getResource(url)).toString("utf8");
                 const userIds = fileContent.split(",");
+                newsletter.addLogEntry(botInd, messageInd, receiversListInd, userIds.length);
 
-                userIds.forEach(async (userId) => {
-                    if (imgIds != null) {
-                        const imgFiles = await Promise.all(imgIds.map(async (id) => await bot.getFile(id)));                        
+                let userInd = 0;
+                for (const userId of userIds) {
+                    let media: InputMedia[];
+
+                    if (imgIds) {
+                        //TODO: change Promise.all to Promise.allSettled and handle image load error.
+                        const imgFiles = await Promise.all(imgIds.map(async (id) => await bot.getFile(id)));
                         const responses = await Promise.all(imgFiles.map(async (file) => {
                             const url = `${baseBotUrl}${process.env.API_TOKEN}/${file.file_path}`; 
                             return await getResource(url);
                         }));
                         
-                        const media: InputMedia[] = [];
+                        media = [];
                         responses.forEach(response => {
                             media.push({ type: 'photo', media: response as any});
                         });
 
                         media[0].caption = message;
                         media[0].parse_mode = "HTML"
-                        helperBot.sendMediaGroup(userId, media)
-                            .then((message) => {
-                                console.log("Message sent successfully", messageDoc._id);
+                    }
+
+                    let receiverInd = userInd;
+                    const messagePromise = new Promise<void> ((resolve, reject) => {
+                        let sendPromise;
+                        if (media) {
+                            sendPromise = helperBot.sendMediaGroup(userId, media);
+                        } else {
+                            sendPromise = helperBot.sendMessage(userId, message, {
+                                parse_mode: "HTML"
+                            });
+                        }
+
+                        sendPromise
+                            .then(() => {
+                                newsletter.setLogResult(botInd, messageInd, receiversListInd, receiverInd, NewsletterResult.Succeeded);
+                                removeFromArray(messagePromises, messagePromise);
+                                resolve();
                             })
                             .catch((error) => {
-                                console.log("Error. Message was not sent", messageDoc._id);
+                                newsletter.setLogResult(botInd, messageInd, receiversListInd, receiverInd, NewsletterResult.Failed);
+                                removeFromArray(messagePromises, messagePromise);
+                                reject(error);
                             });
-                    }
-                    else {
-                        helperBot.sendMessage(userId, message, {
-                            parse_mode: "HTML"
-                        })
-                        .then((message) => {
-                            console.log("Message sent successfully", messageDoc._id);
-                        })
-                        .catch((error) => {
-                            console.log("Error. Message was not sent", messageDoc._id);
-                        });;
-                    }
-                });
-            })
-        })
-    });
+                            
+                    });
+                    messagePromises.push(messagePromise);
 
-    bot.sendMessage(msg.chat.id, "Newsletter sended!");
-    removeFromArray(newsletterPool, newsletter);
+                    userInd++;
+                }
+            }
+        }
+    }
+
+    await Promise.allSettled(messagePromises)
+
+    const log = newsletter.getBriefLog();
+    bot.sendMessage(msg.chat.id, 
+        `<b>Newsletter sent!</b>\n
+        Total messages: ${log.total}
+        Sent successfully: ${log.success}
+        Failed to send: ${log.fail}`,
+        {
+            parse_mode: "HTML"
+        }
+    );
+    
+    newsletterPool.delete(newsletter.getUserId());
 }

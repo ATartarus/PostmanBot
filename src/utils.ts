@@ -1,7 +1,4 @@
-import TelegramBot from "node-telegram-bot-api";
 import { NewsletterProperty } from "./newsletter";
-import User from "./models/user";
-import DatabaseContext from "./services/databaseContext";
 import https from "https";
 
 /**
@@ -51,10 +48,18 @@ export async function getResource(url: string): Promise<Buffer> {
     });
 }
 
-export function removeFromArray(arr: any[], elem: any) {
-    let ind = arr.indexOf(elem);
+
+
+
+type Predicate<T> = (value: T, index: number, obj: T[]) => unknown;
+export function removeFromArray<T>(arr: T[], option: Predicate<T>): void;
+export function removeFromArray<T>(arr: T[], option: T): void;
+export function removeFromArray<T>(arr: T[], option: T | Predicate<T>): void {
+    const isFunc = typeof option === "function";
+
+    let ind = isFunc ? arr.findIndex(option as Predicate<T>) : arr.indexOf(option);
     while (ind != -1) {
         arr.splice(ind, 1);
-        ind = arr.indexOf(elem);
+        ind = isFunc ? arr.findIndex(option as Predicate<T>) : arr.indexOf(option);
     }
 }

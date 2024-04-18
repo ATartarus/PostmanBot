@@ -8,3 +8,4 @@ class ReceiversList {
     }
 }
 exports.default = ReceiversList;
+//# sourceMappingURL=receiversList.js.map

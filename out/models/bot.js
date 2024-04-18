@@ -7,3 +7,4 @@ class Bot {
     }
 }
 exports.default = Bot;
+//# sourceMappingURL=bot.js.map
