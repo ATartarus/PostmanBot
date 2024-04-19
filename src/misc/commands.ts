@@ -8,32 +8,20 @@ const commands = [
         description: "Add new bot for newsletter via token"
     },
     {
-        command: "add_message",
-        description: "Add new message to newsletter"
+        command: "update_bot_receivers",
+        description: "Change bot receiver list"
     },
     {
-        command: "add_receivers",
-        description: "Add new list of message receivers"
-    },
-    {
-        command: "list_bots",
-        description: "List all saved bots"
-    },
-    {
-        command: "list_messages",
-        description: "List all saved messages"
-    },
-    {
-        command: "list_receivers",
-        description: "List all saved receivers"
+        command: "show_bots",
+        description: "Show all saved bots"
     },
     {
         command: "create_newsletter",
         description: "Create newsletter"
     },
     {
-        command: "send_newsletter",
-        description: "Send created newsletter"
+        command: "cancel",
+        description: "Cancel operation"
     }
 ];
 

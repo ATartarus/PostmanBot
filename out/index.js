@@ -40,15 +40,13 @@ const node_telegram_bot_api_1 = __importDefault(require("node-telegram-bot-api")
 const databaseContext_1 = __importDefault(require("./services/databaseContext"));
 const bot_1 = __importDefault(require("./models/bot"));
 const user_1 = __importDefault(require("./models/user"));
-const receiversList_1 = __importDefault(require("./models/receiversList"));
-const newsletter_1 = __importStar(require("./newsletter"));
-const messageBuilder_1 = __importStar(require("./services/messageBuilder"));
-const commands_1 = __importStar(require("./commands"));
-const utils_1 = require("./utils");
+const commands_1 = __importStar(require("./misc/commands"));
+const utils_1 = require("./misc/utils");
+const userState_1 = require("./misc/userState");
+const errors_1 = require("./misc/errors");
+const messageContent_1 = require("./entity/messageContent");
 dotenv_1.default.config();
 const baseBotUrl = "https://api.telegram.org/file/bot";
-//List of the users that should send token, csv file or message so bot is waiting for their input.
-const awaitingList = [];
 const bot = new node_telegram_bot_api_1.default(process.env.API_TOKEN, 
 //{ webHook: { port: +process.env.PORT! } }
 { polling: {
@@ -59,16 +57,13 @@ bot.on("polling_error", err => console.log(err.message));
 //bot.setWebHook(`${process.env.APP_URL}/bot${process.env.API_TOKEN}`);
 bot.setMyCommands(commands_1.default);
 bot.onText(/\/start/, onStart);
-bot.onText(/\/add_message/, onAddMessage);
 bot.onText(/\/add_bot/, onAddBot);
-bot.onText(/\/add_receivers/, onAddRecievers);
-bot.onText(/\/list_messages/, onListMessages);
-bot.onText(/\/list_bots/, onListBots);
-bot.onText(/\/list_receivers/, onListReceivers);
+bot.onText(/\/show_bots/, onShowBots);
+bot.onText(/\/update_bot_receivers/, onUpdateBotReceivers);
 bot.onText(/\/create_newsletter/, onCreateNewsletter);
-bot.onText(/\/send_newsletter/, onSendNewsletter);
+bot.onText(/\/cancel/, onCancel);
+bot.on("callback_query", onInlineKeyboardClick);
 bot.on("message", onMessageReceived);
-bot.on("photo", onPhotoRecieved);
 function onStart(msg) {
     return __awaiter(this, void 0, void 0, function* () {
         var _a, _b;
@@ -78,310 +73,341 @@ function onStart(msg) {
         yield bot.sendMessage(msg.chat.id, res.message, { parse_mode: "HTML" });
     });
 }
-/**
- * Initializes message building by pushing new MessageBuilder with sender id into messageBuilderPool.
- * Or creates message directly if not media group.
- */
-function onAddMessage(msg) {
+function onCancel(msg) {
     return __awaiter(this, void 0, void 0, function* () {
-        bot.sendMessage(msg.chat.id, "Enter new message");
-        awaitingList.push(msg.from.id);
-        bot.once("message", (msg) => __awaiter(this, void 0, void 0, function* () {
-            if ((0, commands_1.textIsCommand)(msg.text))
-                return;
-            const builder = new messageBuilder_1.default(msg.from.id);
-            if (msg.media_group_id) {
-                messageBuilder_1.messageBuilderPool.push(builder);
-                return;
-            }
-            else {
-                (0, messageBuilder_1.fillMessageBuilder)(builder, msg);
-                onMessageBuildEnded(builder);
-            }
-        }));
+        endOperation(msg.from.id);
+        yield bot.sendMessage(msg.chat.id, "Operation canceled");
+    });
+}
+function endOperation(userId) {
+    return __awaiter(this, void 0, void 0, function* () {
+        userState_1.userStates.delete(userId);
+        const dbContext = yield databaseContext_1.default.getInstance();
+        dbContext.stagedObjects.delete(userId);
+        messageContent_1.messagePool.delete(userId);
     });
 }
 function onMessageReceived(msg) {
     return __awaiter(this, void 0, void 0, function* () {
-        const awaiting = awaitingList.find((userId) => { var _a; return userId == ((_a = msg.from) === null || _a === void 0 ? void 0 : _a.id); });
-        if (!(0, commands_1.textIsCommand)(msg.text) && !awaiting) {
-            bot.sendMessage(msg.chat.id, "Look up for the list of valid commands");
-        }
-        (0, utils_1.removeFromArray)(awaitingList, msg.from.id);
-    });
-}
-function onPhotoRecieved(msg) {
-    return __awaiter(this, void 0, void 0, function* () {
-        const builder = messageBuilder_1.messageBuilderPool.find((builder) => builder.getUserId() == msg.from.id);
-        if (builder) {
-            (0, messageBuilder_1.fillMessageBuilder)(builder, msg);
-            awaitingList.push(builder.getUserId());
-            if (builder.timeout)
-                clearTimeout(builder.timeout);
-            /*
-            Единственный таймаут в проекте, мне и самому не хотелось его сюда пихать, но он тут просто необходим
-            т.к. при отправке MediaGroup (нескольких изображений в одном сообшений) тг отсылает каждую пикчу отдельным сообщением,
-            и если принадлежность сообщения к группе можно определить через msg.media_group_id, то конец этой группы никак не помечается.
-            Остается только просить пользователя подтверждать отправку, либо юзать таймаут.
-            */
-            builder.timeout = setTimeout(() => __awaiter(this, void 0, void 0, function* () {
-                yield onMessageBuildEnded(builder);
-            }), messageBuilder_1.messageAwaitTime);
-        }
-    });
-}
-/**
- * Called upon end of message building. Retrieves message from MessageBuilder,
- * removes builder from messageBuilderPool and adds message to database.
- * @param builder - MessageBuilder that ended building
- */
-function onMessageBuildEnded(builder) {
-    return __awaiter(this, void 0, void 0, function* () {
-        const message = builder.getMessage();
-        (0, utils_1.removeFromArray)(messageBuilder_1.messageBuilderPool, builder);
-        (0, utils_1.removeFromArray)(awaitingList, builder.getUserId());
-        if (message.isEmpty()) {
-            bot.sendMessage(builder.getUserId(), "Error. Message was not added");
+        console.log(`userStates: ${userState_1.userStates.size}; stagedObjects: ${(yield databaseContext_1.default.getInstance()).stagedObjects.size}`);
+        if ((0, commands_1.textIsCommand)(msg.text))
             return;
-        }
-        const dbContext = yield databaseContext_1.default.getInstance();
-        try {
-            yield dbContext.messages.insertOne(message);
-            dbContext.validateCollectionSize(dbContext.messages, builder.getUserId());
-            bot.sendMessage(builder.getUserId(), "Message added successfully!");
-        }
-        catch (error) {
-            bot.sendMessage(builder.getUserId(), "Error. Message was not added!");
-        }
-    });
-}
-function onListMessages(msg) {
-    return __awaiter(this, void 0, void 0, function* () {
-        const dbContext = yield databaseContext_1.default.getInstance();
-        const resultList = yield dbContext.getMessageList(msg.from.id);
-        bot.sendMessage(msg.chat.id, resultList);
-    });
-}
-/**
- * Recieves token from user, checks its validity and adds to the database.
- */
-function onAddBot(msg) {
-    return __awaiter(this, void 0, void 0, function* () {
-        bot.sendMessage(msg.chat.id, "Enter your bot token:");
-        awaitingList.push(msg.from.id);
-        bot.once("message", (msg) => __awaiter(this, void 0, void 0, function* () {
-            if ((0, commands_1.textIsCommand)(msg.text))
-                return;
-            const botToken = msg.text;
-            if (!botToken) {
-                yield bot.sendMessage(msg.chat.id, "You must send bot token");
-                return;
-            }
-            const userBot = new node_telegram_bot_api_1.default(botToken);
-            try {
-                yield userBot.getMe();
+        const userState = userState_1.userStates.get(msg.from.id) || userState_1.UserState.Idle;
+        switch (userState) {
+            case userState_1.UserState.EnterBotToken:
                 try {
-                    const dbContext = yield databaseContext_1.default.getInstance();
-                    const token = new bot_1.default(msg.from.id, botToken);
-                    yield dbContext.bots.insertOne(token);
-                    dbContext.validateCollectionSize(dbContext.bots, msg.from.id);
-                    yield bot.sendMessage(msg.chat.id, "Bot added successfully!");
+                    yield onTokenReceived(msg);
+                    yield bot.sendMessage(msg.chat.id, "Send csv file with users telegram id");
+                    userState_1.userStates.set(msg.from.id, userState_1.UserState.SendReceiversFile);
                 }
                 catch (error) {
-                    yield bot.sendMessage(msg.chat.id, "Error. Bot was not added!");
+                    bot.sendMessage(msg.chat.id, error.message);
                 }
-            }
-            catch (error) {
-                yield bot.sendMessage(msg.chat.id, `Error. Unable to establish connection with specified bot.
-            Check token validity and bot settings.`);
-            }
-        }));
+                break;
+            case userState_1.UserState.ChooseBotToUpdate:
+                yield bot.sendMessage(msg.chat.id, "Choose one of the bots");
+                break;
+            case userState_1.UserState.SendReceiversFile:
+                try {
+                    yield onFileReceived(msg);
+                    const dbContext = yield databaseContext_1.default.getInstance();
+                    if (yield dbContext.updateOrInsertStagedBot(msg.from.id)) {
+                        bot.sendMessage(msg.chat.id, "Bot list updated");
+                    }
+                    else {
+                        bot.sendMessage(msg.chat.id, "Error occured");
+                    }
+                    yield endOperation(msg.from.id);
+                }
+                catch (error) {
+                    bot.sendMessage(msg.chat.id, error.message);
+                    if (error instanceof errors_1.InternalError) {
+                        yield endOperation(msg.from.id);
+                    }
+                }
+                break;
+            case userState_1.UserState.EnterMessage:
+                onNewsletterMessageReceived(msg);
+                break;
+            case userState_1.UserState.MessagePreview:
+            case userState_1.UserState.ChooseBot:
+                yield bot.sendMessage(msg.chat.id, "Choose one of the options");
+                break;
+            case userState_1.UserState.ConfirmNewsletter:
+                yield bot.sendMessage(msg.chat.id, "Confirm newsletter or reject by typing /cancel");
+                break;
+            case userState_1.UserState.Idle:
+            default:
+                bot.sendMessage(msg.chat.id, "Look up for a list of valid commands");
+        }
     });
 }
-function onListBots(msg) {
+function onInlineKeyboardClick(ctx) {
+    return __awaiter(this, void 0, void 0, function* () {
+        if (!ctx.data)
+            return;
+        const sourceMsg = ctx.message;
+        if (!sourceMsg) {
+            console.log("Callback message is undefined");
+            return;
+        }
+        const keyboardData = (0, utils_1.parseKeyboardCallback)(ctx.data);
+        const chatId = sourceMsg.chat.id;
+        bot.deleteMessage(chatId, sourceMsg.message_id);
+        switch (keyboardData.state) {
+            case userState_1.UserState.ChooseBotToUpdate: {
+                yield bot.sendMessage(chatId, "Send csv file with users telegram id");
+                userState_1.userStates.set(ctx.from.id, userState_1.UserState.SendReceiversFile);
+                const dbContext = yield databaseContext_1.default.getInstance();
+                const requiredBot = yield dbContext.getBotByInd(ctx.from.id, keyboardData.buttonIndex);
+                if (!requiredBot) {
+                    yield bot.sendMessage(chatId, "Selected bot is not found");
+                    endOperation(ctx.from.id);
+                }
+                console.log(requiredBot);
+                dbContext.stagedObjects.set(ctx.from.id, requiredBot);
+                break;
+            }
+            case userState_1.UserState.MessagePreview: {
+                if (keyboardData.buttonIndex) {
+                    endOperation(ctx.from.id);
+                    userState_1.userStates.set(ctx.from.id, userState_1.UserState.EnterMessage);
+                    yield bot.sendMessage(chatId, "Enter new message");
+                }
+                else {
+                    userState_1.userStates.set(ctx.from.id, userState_1.UserState.ChooseBot);
+                    const dbContext = yield databaseContext_1.default.getInstance();
+                    const count = yield dbContext.bots.countDocuments({ user_id: ctx.from.id });
+                    let resultList = "Your saved bots\n";
+                    resultList += yield dbContext.getBotList(ctx.from.id);
+                    bot.sendMessage(chatId, resultList, {
+                        parse_mode: "HTML",
+                        reply_markup: {
+                            inline_keyboard: (0, utils_1.createInlineKeyboard)(count, 3, userState_1.UserState.ChooseBot)
+                        }
+                    });
+                }
+                break;
+            }
+            case userState_1.UserState.ChooseBot: {
+                const botInd = keyboardData.buttonIndex;
+                messageContent_1.messagePool.get(ctx.from.id).botInd = botInd;
+                const dbContext = yield databaseContext_1.default.getInstance();
+                const requiredBot = yield dbContext.getBotByInd(ctx.from.id, botInd);
+                const newBot = new node_telegram_bot_api_1.default(requiredBot.token);
+                const text = `Newsletter will be sent via bot "${(yield newBot.getMe()).username}".
+            Message will receive ${requiredBot === null || requiredBot === void 0 ? void 0 : requiredBot.receivers_count} users.`;
+                userState_1.userStates.set(ctx.from.id, userState_1.UserState.ConfirmNewsletter);
+                yield bot.sendMessage(chatId, text, {
+                    reply_markup: {
+                        inline_keyboard: (0, utils_1.createInlineKeyboard)(1, 1, userState_1.UserState.ConfirmNewsletter, ["Confirm"])
+                    }
+                });
+                break;
+            }
+            case userState_1.UserState.ConfirmNewsletter: {
+                const messagePromises = [];
+                const dbContext = yield databaseContext_1.default.getInstance();
+                const message = messageContent_1.messagePool.get(ctx.from.id);
+                const botDoc = yield dbContext.getBotByInd(ctx.from.id, message.botInd);
+                const botToken = botDoc["token"];
+                const helperBot = new node_telegram_bot_api_1.default(botToken);
+                const fileId = botDoc["csv_file_id"];
+                const file = yield bot.getFile(fileId);
+                const url = `${baseBotUrl}${process.env.API_TOKEN}/${file.file_path}`;
+                const fileContent = (yield (0, utils_1.getResource)(url)).toString("utf8");
+                const userIds = fileContent.split(",");
+                let userInd = 0;
+                for (const userId of userIds) {
+                    let media;
+                    if (message.imgIds) {
+                        const imgFiles = yield Promise.all(message.imgIds.map((id) => __awaiter(this, void 0, void 0, function* () { return yield bot.getFile(id); })));
+                        const responses = yield Promise.all(imgFiles.map((file) => __awaiter(this, void 0, void 0, function* () {
+                            const url = `${baseBotUrl}${process.env.API_TOKEN}/${file.file_path}`;
+                            return yield (0, utils_1.getResource)(url);
+                        })));
+                        media = [];
+                        responses.forEach(response => {
+                            media.push({ type: 'photo', media: response });
+                        });
+                        media[0].caption = message.body;
+                        media[0].caption_entities = message.entities;
+                        media[0].parse_mode = "HTML";
+                    }
+                    let receiverInd = userInd;
+                    const messagePromise = new Promise((resolve, reject) => {
+                        let sendPromise;
+                        if (media) {
+                            sendPromise = helperBot.sendMediaGroup(userId, media);
+                        }
+                        else {
+                            sendPromise = helperBot.sendMessage(userId, message.body, {
+                                parse_mode: "HTML"
+                            });
+                        }
+                        sendPromise
+                            .then(() => {
+                            //newsletter.setLogResult(botInd, messageInd, receiversListInd, receiverInd, NewsletterResult.Succeeded);
+                            (0, utils_1.removeFromArray)(messagePromises, messagePromise);
+                            resolve();
+                        })
+                            .catch((error) => {
+                            //newsletter.setLogResult(botInd, messageInd, receiversListInd, receiverInd, NewsletterResult.Failed);
+                            (0, utils_1.removeFromArray)(messagePromises, messagePromise);
+                            reject(error);
+                        });
+                    });
+                    messagePromises.push(messagePromise);
+                    userInd++;
+                }
+                yield Promise.allSettled(messagePromises);
+                endOperation(ctx.from.id);
+                // const log = newsletter.getBriefLog();
+                // bot.sendMessage(msg.chat.id, 
+                //     `<b>Newsletter sent!</b>\n
+                //     Total messages: ${log.total}
+                //     Sent successfully: ${log.success}
+                //     Failed to send: ${log.fail}`,
+                //     {
+                //         parse_mode: "HTML"
+                //     }
+                // );
+                break;
+            }
+        }
+        bot.answerCallbackQuery(ctx.id);
+    });
+}
+function onAddBot(msg) {
+    return __awaiter(this, void 0, void 0, function* () {
+        userState_1.userStates.set(msg.from.id, userState_1.UserState.EnterBotToken);
+        yield bot.sendMessage(msg.chat.id, "Enter your bot token");
+    });
+}
+function onTokenReceived(msg) {
+    return __awaiter(this, void 0, void 0, function* () {
+        const botToken = msg.text;
+        if (!botToken) {
+            throw new Error("You must send bot token");
+        }
+        const userBot = new node_telegram_bot_api_1.default(botToken);
+        try {
+            yield userBot.getMe();
+        }
+        catch (error) {
+            throw new Error(`Error. Unable to establish connection with specified bot.
+        Check token validity and bot settings.`);
+        }
+        const dbContext = yield databaseContext_1.default.getInstance();
+        const newBot = new bot_1.default(msg.from.id, botToken);
+        dbContext.stagedObjects.set(msg.from.id, newBot);
+    });
+}
+function onFileReceived(msg) {
+    return __awaiter(this, void 0, void 0, function* () {
+        if (!msg.document) {
+            throw new Error("You must send csv file");
+        }
+        const file = yield bot.getFile(msg.document.file_id);
+        const url = `${baseBotUrl}${process.env.API_TOKEN}/${file.file_path}`;
+        const fileContent = (yield (0, utils_1.getResource)(url)).toString("utf8");
+        const userIds = fileContent.split(",");
+        let receiversCount = 0;
+        for (const id of userIds) {
+            if (Number.isNaN(parseInt(id))) {
+                throw new Error("File has invalid values");
+            }
+            ++receiversCount;
+        }
+        const dbContext = yield databaseContext_1.default.getInstance();
+        const newBot = dbContext.stagedObjects.get(msg.from.id);
+        console.log(newBot instanceof bot_1.default);
+        if (!newBot || !(newBot instanceof bot_1.default)) {
+            throw new errors_1.InternalError("Something went wrong, try whole operation again");
+        }
+        newBot.csv_file_id = msg.document.file_id;
+        newBot.receivers_count = receiversCount;
+    });
+}
+function onShowBots(msg) {
     return __awaiter(this, void 0, void 0, function* () {
         const dbContext = yield databaseContext_1.default.getInstance();
-        const resultList = yield dbContext.getBotList(msg.from.id);
-        bot.sendMessage(msg.chat.id, resultList);
+        let resultList = "Your saved bots\n";
+        resultList += yield dbContext.getBotList(msg.from.id);
+        bot.sendMessage(msg.chat.id, resultList, {
+            parse_mode: "HTML"
+        });
     });
 }
-/**
- * Recieves csv file from user and adds its id to the database.
- */
-function onAddRecievers(msg) {
+function onUpdateBotReceivers(msg) {
     return __awaiter(this, void 0, void 0, function* () {
-        bot.sendMessage(msg.chat.id, "Send csv file with users id");
-        awaitingList.push(msg.from.id);
-        bot.once("message", (msg) => __awaiter(this, void 0, void 0, function* () {
-            if ((0, commands_1.textIsCommand)(msg.text))
-                return;
-            if (!msg.document) {
-                yield bot.sendMessage(msg.chat.id, "You must send csv file");
-                return;
-            }
-            const recievers = new receiversList_1.default(msg.from.id, msg.document.file_id, msg.caption);
-            const dbContext = yield databaseContext_1.default.getInstance();
-            try {
-                yield dbContext.receivers.insertOne(recievers);
-                dbContext.validateCollectionSize(dbContext.receivers, (msg.from.id));
-                bot.sendMessage(msg.chat.id, "File added successfully!");
-            }
-            catch (error) {
-                bot.sendMessage(msg.chat.id, "Error. File was not added!");
-            }
-        }));
-    });
-}
-function onListReceivers(msg) {
-    return __awaiter(this, void 0, void 0, function* () {
+        userState_1.userStates.set(msg.from.id, userState_1.UserState.ChooseBotToUpdate);
+        let resultList = "Choose bot to update\n";
         const dbContext = yield databaseContext_1.default.getInstance();
-        const resultList = yield dbContext.getReceiverList(msg.from.id);
-        bot.sendMessage(msg.chat.id, resultList);
+        const count = yield dbContext.bots.countDocuments({ user_id: msg.from.id });
+        resultList += yield dbContext.getBotList(msg.from.id);
+        yield bot.sendMessage(msg.chat.id, resultList, {
+            parse_mode: "HTML",
+            reply_markup: {
+                inline_keyboard: (0, utils_1.createInlineKeyboard)(count, 3, userState_1.UserState.ChooseBotToUpdate)
+            },
+        });
     });
 }
-/**
- * Lists user messages, bots and receivers. Adds keyboard under each list for selection.
- * Creates new Newsletter with user id and pushes it to the newsletter pool.
- */
 function onCreateNewsletter(msg) {
     return __awaiter(this, void 0, void 0, function* () {
-        newsletter_1.newsletterPool.set(msg.from.id, new newsletter_1.default(msg.from.id));
-        const dbContext = yield databaseContext_1.default.getInstance();
-        //Строковый енам не поддерживает реверс маппинг(
-        for (const property of [newsletter_1.NewsletterProperty.Bots, newsletter_1.NewsletterProperty.Messages, newsletter_1.NewsletterProperty.Receivers]) {
-            let list = "Not found";
-            let count = 0;
-            switch (property) {
-                case newsletter_1.NewsletterProperty.Bots:
-                    list = yield dbContext.getBotList(msg.from.id);
-                    //можно было бы обращаться к dbContext.messages/bots/receivers через NewsletterProperty как в обработчике callback_query ниже,
-                    //но тогда NewsletterProperty было бы уже и DatabaseContextProperty. Сокращается две строчки но вносится лишняя зависимость.
-                    count = yield dbContext.bots.countDocuments({ user_id: msg.from.id });
-                    break;
-                case newsletter_1.NewsletterProperty.Messages:
-                    list = yield dbContext.getMessageList(msg.from.id);
-                    count = yield dbContext.messages.countDocuments({ user_id: msg.from.id });
-                    break;
-                case newsletter_1.NewsletterProperty.Receivers:
-                    list = yield dbContext.getReceiverList(msg.from.id);
-                    count = yield dbContext.receivers.countDocuments({ user_id: msg.from.id });
-                    break;
-            }
-            yield bot.sendMessage(msg.chat.id, list, {
+        userState_1.userStates.set(msg.from.id, userState_1.UserState.EnterMessage);
+        yield bot.sendMessage(msg.chat.id, "Enter new message");
+    });
+}
+function onNewsletterMessageReceived(msg) {
+    if (msg.media_group_id) {
+        let partialMessage = messageContent_1.messagePool.get(msg.from.id);
+        if (!partialMessage) {
+            partialMessage = new messageContent_1.MessageContent(msg.from.id);
+            messageContent_1.messagePool.set(msg.from.id, partialMessage);
+        }
+        partialMessage.append(msg);
+        clearTimeout(partialMessage.mediaGroupEndTimer);
+        partialMessage.mediaGroupEndTimer = setTimeout(() => {
+            onNewsletterMessageReady(msg);
+        }, messageContent_1.messageAwaitTime);
+    }
+    else {
+        let fullMessage = new messageContent_1.MessageContent(msg.from.id);
+        fullMessage.append(msg);
+        messageContent_1.messagePool.set(msg.from.id, fullMessage);
+        onNewsletterMessageReady(msg);
+    }
+}
+function onNewsletterMessageReady(msg) {
+    return __awaiter(this, void 0, void 0, function* () {
+        const newsletterMsg = messageContent_1.messagePool.get(msg.from.id);
+        userState_1.userStates.set(msg.from.id, userState_1.UserState.MessagePreview);
+        const previewKeyboard = (0, utils_1.createInlineKeyboard)(2, 2, userState_1.UserState.MessagePreview, ["Continue", "Recreate"]);
+        if (newsletterMsg.isMediaGroup()) {
+            const media = [];
+            newsletterMsg.imgIds.forEach((id) => {
+                media.push({ type: 'photo', media: id });
+            });
+            media[0].caption = newsletterMsg.body;
+            media[0].caption_entities = newsletterMsg.entities;
+            yield bot.sendMediaGroup(msg.chat.id, media);
+            yield bot.sendMessage(msg.chat.id, "113", {
                 reply_markup: {
-                    inline_keyboard: (0, utils_1.createInlineKeyboard)(count, 3, property)
+                    inline_keyboard: previewKeyboard
                 }
             });
         }
-    });
-}
-bot.on('callback_query', (ctx) => __awaiter(void 0, void 0, void 0, function* () {
-    if (ctx.data == undefined)
-        return;
-    const keyboardData = (0, utils_1.parseKeyboardCallback)(ctx.data);
-    const newsletter = newsletter_1.newsletterPool.get(ctx.from.id);
-    if (!newsletter) {
-        console.log("Could not find newsletter in the pool with userid = ", ctx.from.id);
-    }
-    else {
-        newsletter[keyboardData.property].add(keyboardData.buttonIndex);
-    }
-}));
-/**
- * Sends newsletter with corresponding user id from newsletterPool.
- * Each message is sent by each bot to the each of users.
- */
-function onSendNewsletter(msg) {
-    return __awaiter(this, void 0, void 0, function* () {
-        const newsletter = newsletter_1.newsletterPool.get(msg.from.id);
-        if (!newsletter) {
-            bot.sendMessage(msg.chat.id, "You must create newsletter with create_newsletter command");
-            return;
-        }
-        if (!newsletter.isValid()) {
-            bot.sendMessage(msg.chat.id, "Newsletter must contain at least one message, bot and reciever");
-            return;
-        }
-        const dbContext = yield databaseContext_1.default.getInstance();
-        const messages = yield dbContext.messages.find({ user_id: msg.from.id }).toArray();
-        const bots = yield dbContext.bots.find({ user_id: msg.from.id }).toArray();
-        const recievers = yield dbContext.receivers.find({ user_id: msg.from.id }).toArray();
-        const messagePromises = [];
-        for (const botInd of newsletter.bots) {
-            const botToken = bots[botInd]["token"];
-            const helperBot = new node_telegram_bot_api_1.default(botToken);
-            for (const messageInd of newsletter.messages) {
-                const messageDoc = messages[messageInd];
-                const imgIds = messageDoc["img_id"];
-                let message = "";
-                if (messageDoc["subject"]) {
-                    message += `<b>${messageDoc["subject"]}</b>\n\n`;
+        else {
+            yield bot.sendMessage(msg.chat.id, newsletterMsg.body, {
+                entities: newsletterMsg.entities,
+                disable_web_page_preview: true,
+                reply_markup: {
+                    inline_keyboard: previewKeyboard
                 }
-                if (messageDoc["body"]) {
-                    message += messageDoc["body"];
-                }
-                for (const receiversListInd of newsletter.receivers) {
-                    const fileId = recievers[receiversListInd]["csv_file_id"];
-                    const file = yield bot.getFile(fileId);
-                    const url = `${baseBotUrl}${process.env.API_TOKEN}/${file.file_path}`;
-                    const fileContent = (yield (0, utils_1.getResource)(url)).toString("utf8");
-                    const userIds = fileContent.split(",");
-                    newsletter.addLogEntry(botInd, messageInd, receiversListInd, userIds.length);
-                    let userInd = 0;
-                    for (const userId of userIds) {
-                        let media;
-                        if (imgIds) {
-                            //TODO: change Promise.all to Promise.allSettled and handle image load error.
-                            const imgFiles = yield Promise.all(imgIds.map((id) => __awaiter(this, void 0, void 0, function* () { return yield bot.getFile(id); })));
-                            const responses = yield Promise.all(imgFiles.map((file) => __awaiter(this, void 0, void 0, function* () {
-                                const url = `${baseBotUrl}${process.env.API_TOKEN}/${file.file_path}`;
-                                return yield (0, utils_1.getResource)(url);
-                            })));
-                            media = [];
-                            responses.forEach(response => {
-                                media.push({ type: 'photo', media: response });
-                            });
-                            media[0].caption = message;
-                            media[0].parse_mode = "HTML";
-                        }
-                        let receiverInd = userInd;
-                        const messagePromise = new Promise((resolve, reject) => {
-                            let sendPromise;
-                            if (media) {
-                                sendPromise = helperBot.sendMediaGroup(userId, media);
-                            }
-                            else {
-                                sendPromise = helperBot.sendMessage(userId, message, {
-                                    parse_mode: "HTML"
-                                });
-                            }
-                            sendPromise
-                                .then(() => {
-                                newsletter.setLogResult(botInd, messageInd, receiversListInd, receiverInd, newsletter_1.NewsletterResult.Succeeded);
-                                (0, utils_1.removeFromArray)(messagePromises, messagePromise);
-                                resolve();
-                            })
-                                .catch((error) => {
-                                newsletter.setLogResult(botInd, messageInd, receiversListInd, receiverInd, newsletter_1.NewsletterResult.Failed);
-                                (0, utils_1.removeFromArray)(messagePromises, messagePromise);
-                                reject(error);
-                            });
-                        });
-                        messagePromises.push(messagePromise);
-                        userInd++;
-                    }
-                }
-            }
+            });
         }
-        yield Promise.allSettled(messagePromises);
-        const log = newsletter.getBriefLog();
-        bot.sendMessage(msg.chat.id, `<b>Newsletter sent!</b>\n
-        Total messages: ${log.total}
-        Sent successfully: ${log.success}
-        Failed to send: ${log.fail}`, {
-            parse_mode: "HTML"
-        });
-        newsletter_1.newsletterPool.delete(newsletter.getUserId());
     });
 }
 //# sourceMappingURL=index.js.map

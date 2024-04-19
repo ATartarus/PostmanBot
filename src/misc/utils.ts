@@ -1,5 +1,6 @@
-import { NewsletterProperty } from "./newsletter";
+import { NewsletterProperty } from "../entity/newsletter";
 import https from "https";
+import { UserState } from "./userState";
 
 /**
  * Retrieves newsletter property associated with keyboard and index of pressed button from string.
@@ -8,12 +9,12 @@ import https from "https";
 export function parseKeyboardCallback(data: string) {
     const pivot = data.indexOf(':');
     return {
-        property: data.substring(0, pivot) as NewsletterProperty,
+        state: parseInt(data.substring(0, pivot)) as UserState,
         buttonIndex: Number.parseInt(data.substring(pivot + 1))
     };
 }
 
-export function createInlineKeyboard(buttons: number, cols: number, property: NewsletterProperty) {
+export function createInlineKeyboard(buttons: number, cols: number, state: UserState, labels?: string[]) {
     let keyboard = [];
     let row: any[] = [];
 
@@ -22,7 +23,8 @@ export function createInlineKeyboard(buttons: number, cols: number, property: Ne
             keyboard.push(row);
             row = [];
         }
-        row.push({text: (i + 1).toString(), callback_data: property + ":" + i})
+        const text: string = labels ? labels[i] : (i + 1).toString();
+        row.push({text: text ?? (i + 1).toString(), callback_data: `${state}:${i}`})
     }
     if (row.length > 0) {
         keyboard.push(row);

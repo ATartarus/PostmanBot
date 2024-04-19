@@ -1,20 +1,19 @@
 import dotenv from "dotenv";
-import TelegramBot, { InputMedia } from "node-telegram-bot-api";
+import TelegramBot, { InputMedia , SendMediaGroupOptions} from "node-telegram-bot-api";
 import DatabaseContext from "./services/databaseContext";
-import Token from "./models/bot";
+import Bot from "./models/bot";
 import User from "./models/user";
-import ReceiversList from "./models/receiversList";
-import Newsletter, { NewsletterProperty, NewsletterResult, newsletterPool } from "./newsletter";
-import MessageBuilder, { messageBuilderPool, messageAwaitTime, fillMessageBuilder } from "./services/messageBuilder";
-import commands, { textIsCommand } from "./commands";
-import { getResource, createInlineKeyboard, parseKeyboardCallback, removeFromArray } from "./utils";
+import Newsletter, { NewsletterProperty, NewsletterResult, newsletterPool } from "./entity/newsletter";
+import commands, { textIsCommand } from "./misc/commands";
+import { getResource, createInlineKeyboard, parseKeyboardCallback, removeFromArray } from "./misc/utils";
+import { userStates, UserState } from "./misc/userState";
+import { InternalError } from "./misc/errors";
+import { MessageContent, messageAwaitTime, messagePool } from "./entity/messageContent";
+
 
 dotenv.config();
 
 const baseBotUrl = "https://api.telegram.org/file/bot";
-//List of the users that should send token, csv file or message so bot is waiting for their input.
-const awaitingList: number[] = [];
-
 
 const bot = new TelegramBot(
     process.env.API_TOKEN!,
@@ -25,22 +24,22 @@ const bot = new TelegramBot(
     //   }}
 );
 
+
 //bot.on("polling_error", err => console.log(err.message));
 bot.setWebHook(`${process.env.APP_URL}/bot${process.env.API_TOKEN}`);
 
 bot.setMyCommands(commands);
 
+
 bot.onText(/\/start/, onStart);
-bot.onText(/\/add_message/, onAddMessage);
 bot.onText(/\/add_bot/, onAddBot);
-bot.onText(/\/add_receivers/, onAddRecievers);
-bot.onText(/\/list_messages/, onListMessages);
-bot.onText(/\/list_bots/, onListBots);
-bot.onText(/\/list_receivers/, onListReceivers);
+bot.onText(/\/show_bots/, onShowBots);
+bot.onText(/\/update_bot_receivers/, onUpdateBotReceivers);
 bot.onText(/\/create_newsletter/, onCreateNewsletter);
-bot.onText(/\/send_newsletter/, onSendNewsletter);
+bot.onText(/\/cancel/, onCancel);
+
+bot.on("callback_query", onInlineKeyboardClick);
 bot.on("message", onMessageReceived);
-bot.on("photo", onPhotoRecieved);
 
 
 async function onStart(msg: TelegramBot.Message): Promise<void> {
@@ -55,338 +54,368 @@ async function onStart(msg: TelegramBot.Message): Promise<void> {
     await bot.sendMessage(msg.chat.id, res.message, { parse_mode: "HTML"});
 }
 
-/**
- * Initializes message building by pushing new MessageBuilder with sender id into messageBuilderPool.
- * Or creates message directly if not media group.
- */
-async function onAddMessage(msg: TelegramBot.Message) {    
-    bot.sendMessage(msg.chat.id, "Enter new message");
 
-    awaitingList.push(msg.from!.id);
 
-    bot.once("message", async (msg) => {
-        if (textIsCommand(msg.text)) return;
-        
-        const builder = new MessageBuilder(msg.from!.id);
-        if (msg.media_group_id) {
-            messageBuilderPool.push(builder);
-            return;
-        } else {
-            fillMessageBuilder(builder, msg);
-            onMessageBuildEnded(builder);
-        }
-    });
+async function onCancel(msg: TelegramBot.Message){
+    endOperation(msg.from!.id);
+    await bot.sendMessage(msg.chat.id, "Operation canceled");
 }
+
+async function endOperation(userId: number) {
+    userStates.delete(userId);
+    const dbContext = await DatabaseContext.getInstance();
+    dbContext.stagedObjects.delete(userId);
+    messagePool.delete(userId);
+}
+
+
 
 async function onMessageReceived(msg: TelegramBot.Message) {
-    const awaiting = awaitingList.find((userId) => userId == msg.from?.id);
+    console.log(`userStates: ${userStates.size}; stagedObjects: ${(await DatabaseContext.getInstance()).stagedObjects.size}`);
+    if (textIsCommand(msg.text)) return;
 
-    if (!textIsCommand(msg.text) && !awaiting) {
-        bot.sendMessage(msg.chat.id, "Look up for the list of valid commands");
+    const userState = userStates.get(msg.from!.id) || UserState.Idle;
+
+    switch (userState) {
+        case UserState.EnterBotToken: 
+            try {
+                await onTokenReceived(msg);
+                await bot.sendMessage(msg.chat.id, "Send csv file with users telegram id");
+                userStates.set(msg.from!.id, UserState.SendReceiversFile);
+            } catch (error) {
+                bot.sendMessage(msg.chat.id, (error as Error).message);
+            }
+
+            break;
+        case UserState.ChooseBotToUpdate:
+            await bot.sendMessage(msg.chat.id, "Choose one of the bots");
+            break;
+        case UserState.SendReceiversFile: 
+            try {
+                await onFileReceived(msg);
+                const dbContext = await DatabaseContext.getInstance();
+
+                if (await dbContext.updateOrInsertStagedBot(msg.from!.id)) {
+                    bot.sendMessage(msg.chat.id, "Bot list updated");
+                } else {
+                    bot.sendMessage(msg.chat.id, "Error occured");
+                }
+                await endOperation(msg.from!.id);
+            } catch (error) {
+                bot.sendMessage(msg.chat.id, (error as Error).message);
+
+                if (error instanceof InternalError) {
+                    await endOperation(msg.from!.id);
+                }
+            }
+
+            break;
+        case UserState.EnterMessage:
+            onNewsletterMessageReceived(msg);
+            break;
+        case UserState.MessagePreview:
+        case UserState.ChooseBot:
+            await bot.sendMessage(msg.chat.id, "Choose one of the options");
+            break;
+        case UserState.ConfirmNewsletter:
+            await bot.sendMessage(msg.chat.id, "Confirm newsletter or reject by typing /cancel");
+            break;
+        case UserState.Idle:
+        default:
+            bot.sendMessage(msg.chat.id, "Look up for a list of valid commands");
     }
-
-    removeFromArray(awaitingList, msg.from!.id);
 }
 
-async function onPhotoRecieved(msg: TelegramBot.Message) {
-    const builder = messageBuilderPool.find((builder) => builder.getUserId() == msg.from!.id);
 
-    if (builder) {
-        fillMessageBuilder(builder, msg);
-        awaitingList.push(builder.getUserId());
-        
-        if (builder.timeout) clearTimeout(builder.timeout);
-        /*
-        Единственный таймаут в проекте, мне и самому не хотелось его сюда пихать, но он тут просто необходим
-        т.к. при отправке MediaGroup (нескольких изображений в одном сообшений) тг отсылает каждую пикчу отдельным сообщением,
-        и если принадлежность сообщения к группе можно определить через msg.media_group_id, то конец этой группы никак не помечается.
-        Остается только просить пользователя подтверждать отправку, либо юзать таймаут.
-        */
-        builder.timeout = setTimeout(async () => {
-            await onMessageBuildEnded(builder);
-        }, messageAwaitTime);
-    }
-}
+async function onInlineKeyboardClick(ctx: TelegramBot.CallbackQuery) {
+    if (!ctx.data) return;
 
-/**
- * Called upon end of message building. Retrieves message from MessageBuilder,
- * removes builder from messageBuilderPool and adds message to database.
- * @param builder - MessageBuilder that ended building
- */
-async function onMessageBuildEnded(builder: MessageBuilder) {
-    const message = builder.getMessage();
-
-    removeFromArray(messageBuilderPool, builder);
-    removeFromArray(awaitingList, builder.getUserId());
-
-    if (message.isEmpty()) {
-        bot.sendMessage(builder.getUserId(), "Error. Message was not added");
+    const sourceMsg = ctx.message;
+    if (!sourceMsg) {
+        console.log("Callback message is undefined");
         return;
     }
 
-    const dbContext = await DatabaseContext.getInstance();
+    const keyboardData = parseKeyboardCallback(ctx.data);
+    const chatId = sourceMsg.chat.id;
+    bot.deleteMessage(chatId, sourceMsg.message_id);
+    
+    switch (keyboardData.state) {
+        case UserState.ChooseBotToUpdate: {
+            await bot.sendMessage(chatId, "Send csv file with users telegram id");
+            userStates.set(ctx.from!.id, UserState.SendReceiversFile);
+            
+            const dbContext = await DatabaseContext.getInstance();
+            const requiredBot = await dbContext.getBotByInd(ctx.from!.id, keyboardData.buttonIndex);
+            
+            if (!requiredBot) {
+                await bot.sendMessage(chatId, "Selected bot is not found");
+                endOperation(ctx.from.id);
+            }
+            console.log(requiredBot);
+            dbContext.stagedObjects.set(ctx.from!.id, requiredBot);
+            break;
+        }
+        case UserState.MessagePreview: {
+            if (keyboardData.buttonIndex) {
+                endOperation(ctx.from.id);
+                userStates.set(ctx.from.id, UserState.EnterMessage);
+                await bot.sendMessage(chatId, "Enter new message");
+            } else {
+                userStates.set(ctx.from.id, UserState.ChooseBot);
+                
+                const dbContext = await DatabaseContext.getInstance();
+                const count = await dbContext.bots.countDocuments({ user_id: ctx.from!.id});
+                let resultList = "Your saved bots\n";
+                resultList += await dbContext.getBotList(ctx.from!.id);
+            
+                bot.sendMessage(chatId, resultList, {
+                    parse_mode: "HTML",
+                    reply_markup: {
+                        inline_keyboard: createInlineKeyboard(count, 3, UserState.ChooseBot)
+                    }
+                });
+            }
+            break;
+        }
+        case UserState.ChooseBot: {
+            const botInd = keyboardData.buttonIndex;
+            messagePool.get(ctx.from.id)!.botInd = botInd;
 
+            const dbContext = await DatabaseContext.getInstance();
+            const requiredBot = await dbContext.getBotByInd(ctx.from.id, botInd);
+            const newBot = new TelegramBot(requiredBot!.token);
+            const text = `Newsletter will be sent via bot "${(await newBot.getMe()).username}".
+            Message will receive ${requiredBot?.receivers_count} users.`;
+
+            userStates.set(ctx.from.id, UserState.ConfirmNewsletter);
+            await bot.sendMessage(chatId, text, {
+                reply_markup: {
+                    inline_keyboard: createInlineKeyboard(1, 1, UserState.ConfirmNewsletter, ["Confirm"])
+                }
+            });
+            break;
+        }
+        case UserState.ConfirmNewsletter: {
+            const messagePromises: Promise<void>[] = [];
+            const dbContext = await DatabaseContext.getInstance();
+            const message = messagePool.get(ctx.from.id);
+            const botDoc = await dbContext.getBotByInd(ctx.from.id, message!.botInd!);
+            const botToken = botDoc!["token"];
+            const helperBot = new TelegramBot(botToken);
+
+
+            const fileId = botDoc!["csv_file_id"]!;
+            const file = await bot.getFile(fileId);
+            const url = `${baseBotUrl}${process.env.API_TOKEN}/${file.file_path}`;
+            const fileContent = (await getResource(url)).toString("utf8");
+            const userIds = fileContent.split(",");
+
+            let userInd = 0;
+            for (const userId of userIds) {
+                let media: InputMedia[];
+
+                if (message!.imgIds) {
+                    const imgFiles = await Promise.all(message!.imgIds.map(async (id) => await bot.getFile(id)));
+                    const responses = await Promise.all(imgFiles.map(async (file) => {
+                        const url = `${baseBotUrl}${process.env.API_TOKEN}/${file.file_path}`; 
+                        return await getResource(url);
+                    }));
+                    
+                    media = [];
+                    responses.forEach(response => {
+                        media.push({ type: 'photo', media: response as any});
+                    });
+
+                    media[0].caption = message!.body;
+                    media[0].caption_entities = message!.entities;
+                    media[0].parse_mode = "HTML"
+                }
+
+                let receiverInd = userInd;
+                const messagePromise = new Promise<void> ((resolve, reject) => {
+                    let sendPromise;
+                    if (media) {
+                        sendPromise = helperBot.sendMediaGroup(userId, media);
+                    } else {
+                        sendPromise = helperBot.sendMessage(userId, message!.body!, {
+                            parse_mode: "HTML"
+                        });
+                    }
+
+                    sendPromise
+                        .then(() => {
+                            //newsletter.setLogResult(botInd, messageInd, receiversListInd, receiverInd, NewsletterResult.Succeeded);
+                            removeFromArray(messagePromises, messagePromise);
+                            resolve();
+                        })
+                        .catch((error) => {
+                            //newsletter.setLogResult(botInd, messageInd, receiversListInd, receiverInd, NewsletterResult.Failed);
+                            removeFromArray(messagePromises, messagePromise);
+                            reject(error);
+                        });
+                        
+                });
+                messagePromises.push(messagePromise);
+
+                userInd++;
+            }
+
+            await Promise.allSettled(messagePromises)
+
+            endOperation(ctx.from.id);
+            // const log = newsletter.getBriefLog();
+            // bot.sendMessage(msg.chat.id, 
+            //     `<b>Newsletter sent!</b>\n
+            //     Total messages: ${log.total}
+            //     Sent successfully: ${log.success}
+            //     Failed to send: ${log.fail}`,
+            //     {
+            //         parse_mode: "HTML"
+            //     }
+            // );
+            break;
+        }
+    }
+
+    bot.answerCallbackQuery(ctx.id);
+}
+
+
+async function onAddBot(msg: TelegramBot.Message) {
+    userStates.set(msg.from!.id, UserState.EnterBotToken);
+    await bot.sendMessage(msg.chat.id, "Enter your bot token");
+}
+
+async function onTokenReceived(msg: TelegramBot.Message) {
+    const botToken = msg.text;
+    if (!botToken) {
+        throw new Error("You must send bot token");
+    }
+
+    const userBot = new TelegramBot(botToken);
     try {
-        await dbContext.messages.insertOne(message);
-        dbContext.validateCollectionSize(dbContext.messages, builder.getUserId());
-        bot.sendMessage(builder.getUserId(), "Message added successfully!");
+        await userBot.getMe();
     } catch (error) {
-        bot.sendMessage(builder.getUserId(), "Error. Message was not added!");
+        throw new Error(`Error. Unable to establish connection with specified bot.
+        Check token validity and bot settings.`);
+    }
+
+    const dbContext = await DatabaseContext.getInstance();
+    const newBot = new Bot(msg.from!.id, botToken);
+    dbContext.stagedObjects.set(msg.from!.id, newBot);
+}
+
+async function onFileReceived(msg: TelegramBot.Message) {
+    if (!msg.document) {
+        throw new Error("You must send csv file");
+    }
+
+    const file = await bot.getFile(msg.document.file_id);
+    const url = `${baseBotUrl}${process.env.API_TOKEN}/${file.file_path}`;
+    const fileContent = (await getResource(url)).toString("utf8");
+    const userIds = fileContent.split(",");
+
+    let receiversCount = 0;
+    for (const id of userIds) {
+        if (Number.isNaN(parseInt(id))) {
+            throw new Error("File has invalid values");
+        }
+        ++receiversCount;
+    }
+
+    const dbContext = await DatabaseContext.getInstance();
+    const newBot = dbContext.stagedObjects.get(msg.from!.id);
+
+    console.log(newBot instanceof Bot);
+    if (!newBot || !(newBot instanceof Bot)) {
+        throw new InternalError("Something went wrong, try whole operation again");
+    }
+
+    newBot.csv_file_id = msg.document.file_id;
+    newBot.receivers_count = receiversCount;
+}
+
+
+async function onShowBots(msg: TelegramBot.Message) {
+    const dbContext = await DatabaseContext.getInstance();
+    let resultList = "Your saved bots\n";
+    resultList += await dbContext.getBotList(msg.from!.id);
+
+    bot.sendMessage(msg.chat.id, resultList, {
+        parse_mode: "HTML"
+    });
+}
+
+async function onUpdateBotReceivers(msg: TelegramBot.Message) {    
+    userStates.set(msg.from!.id, UserState.ChooseBotToUpdate);
+
+    let resultList = "Choose bot to update\n";
+    const dbContext = await DatabaseContext.getInstance();
+    const count = await dbContext.bots.countDocuments({ user_id: msg.from!.id});
+    resultList += await dbContext.getBotList(msg.from!.id);
+
+    await bot.sendMessage(msg.chat.id, resultList, {
+        parse_mode: "HTML",
+        reply_markup: {
+            inline_keyboard: createInlineKeyboard(count, 3, UserState.ChooseBotToUpdate)
+        },
+    });
+}
+
+
+async function onCreateNewsletter(msg: TelegramBot.Message) {
+    userStates.set(msg.from!.id, UserState.EnterMessage);
+    await bot.sendMessage(msg.chat.id, "Enter new message");
+}
+
+function onNewsletterMessageReceived(msg: TelegramBot.Message) {
+    if (msg.media_group_id) {
+        let partialMessage = messagePool.get(msg.from!.id);
+        if (!partialMessage) {
+            partialMessage = new MessageContent(msg.from!.id);
+            messagePool.set(msg.from!.id, partialMessage);
+        }
+
+        partialMessage.append(msg);
+        clearTimeout(partialMessage.mediaGroupEndTimer);
+        partialMessage.mediaGroupEndTimer = setTimeout(() => {
+            onNewsletterMessageReady(msg);
+        }, messageAwaitTime);
+    } else {
+        let fullMessage = new MessageContent(msg.from!.id);
+        fullMessage.append(msg);
+        messagePool.set(msg.from!.id, fullMessage);
+        onNewsletterMessageReady(msg);
     }
 }
 
-async function onListMessages(msg: TelegramBot.Message) {
-    const dbContext = await DatabaseContext.getInstance();
-    const resultList = await dbContext.getMessageList(msg.from!.id);
-
-    bot.sendMessage(msg.chat.id, resultList);
-}
-
-/**
- * Recieves token from user, checks its validity and adds to the database.
- */
-async function onAddBot(msg: TelegramBot.Message) {
-    bot.sendMessage(msg.chat.id, "Enter your bot token:")
-    awaitingList.push(msg.from!.id);
-
-    bot.once("message", async (msg) => {
-        if (textIsCommand(msg.text)) return;
-
-        const botToken = msg.text;
-        if (!botToken) {
-            await bot.sendMessage(msg.chat.id, "You must send bot token");
-            return;
-        }
-
-        const userBot = new TelegramBot(botToken);
-        try {
-            await userBot.getMe();
-
-            try {
-                const dbContext = await DatabaseContext.getInstance();
-                const token = new Token(msg.from!.id, botToken);
-
-                await dbContext.bots.insertOne(token);
-                dbContext.validateCollectionSize(dbContext.bots, msg.from!.id);
-                await bot.sendMessage(msg.chat.id, "Bot added successfully!");
-            } catch (error) {
-                await bot.sendMessage(msg.chat.id, "Error. Bot was not added!");
-            }
-
-        } catch (error) {
-            await bot.sendMessage(msg.chat.id, `Error. Unable to establish connection with specified bot.
-            Check token validity and bot settings.`);
-        }
-    });
-}
-
-async function onListBots(msg: TelegramBot.Message) {
-    const dbContext = await DatabaseContext.getInstance();
-    const resultList = await dbContext.getBotList(msg.from!.id);
-
-    bot.sendMessage(msg.chat.id, resultList);
-}
-
-/**
- * Recieves csv file from user and adds its id to the database.
- */
-async function onAddRecievers(msg: TelegramBot.Message) {
-    bot.sendMessage(msg.chat.id, "Send csv file with users id");
-    awaitingList.push(msg.from!.id);
+async function onNewsletterMessageReady(msg:TelegramBot.Message) {
+    const newsletterMsg = messagePool.get(msg.from!.id)!;
+    userStates.set(msg.from!.id, UserState.MessagePreview);
+    const previewKeyboard =  createInlineKeyboard(2, 2, UserState.MessagePreview, ["Continue", "Recreate"]);
     
-    bot.once("message", async (msg) => {
-        if (textIsCommand(msg.text)) return;
+    if (newsletterMsg.isMediaGroup()) {
+        const media: InputMedia[] = [];
+        newsletterMsg.imgIds!.forEach((id) => {
+            media.push({ type: 'photo', media: id });
+        })
+        media[0].caption = newsletterMsg.body;
+        media[0].caption_entities = newsletterMsg.entities; 
 
-        if (!msg.document){
-            await bot.sendMessage(msg.chat.id, "You must send csv file");
-            return;
-        }
-
-        const recievers = new ReceiversList(msg.from!.id, msg.document.file_id, msg.caption);
-        const dbContext = await DatabaseContext.getInstance();
-
-        try {
-            await dbContext.receivers.insertOne(recievers);
-            dbContext.validateCollectionSize(dbContext.receivers,(msg.from!.id));
-            bot.sendMessage(msg.chat.id, "File added successfully!");
-        }
-        catch (error) {
-            bot.sendMessage(msg.chat.id, "Error. File was not added!");
-        }
-    });
-}
-
-async function onListReceivers(msg: TelegramBot.Message) {
-    const dbContext = await DatabaseContext.getInstance();
-    const resultList = await dbContext.getReceiverList(msg.from!.id);
-
-    bot.sendMessage(msg.chat.id, resultList);
-}
-
-/**
- * Lists user messages, bots and receivers. Adds keyboard under each list for selection.
- * Creates new Newsletter with user id and pushes it to the newsletter pool. 
- */
-async function onCreateNewsletter(msg: TelegramBot.Message) {
-    newsletterPool.set(msg.from!.id, new Newsletter(msg.from!.id));
-    const dbContext = await DatabaseContext.getInstance();
-    
-    //Строковый енам не поддерживает реверс маппинг(
-    for (const property of [NewsletterProperty.Bots, NewsletterProperty.Messages, NewsletterProperty.Receivers]) {
-        let list = "Not found";
-        let count = 0;
-        
-        switch (property) {
-            case NewsletterProperty.Bots:
-                list = await dbContext.getBotList(msg.from!.id);
-                //можно было бы обращаться к dbContext.messages/bots/receivers через NewsletterProperty как в обработчике callback_query ниже,
-                //но тогда NewsletterProperty было бы уже и DatabaseContextProperty. Сокращается две строчки но вносится лишняя зависимость.
-                count = await dbContext.bots.countDocuments({ user_id: msg.from!.id });
-                break;
-            case NewsletterProperty.Messages:
-                list = await dbContext.getMessageList(msg.from!.id);
-                count = await dbContext.messages.countDocuments({ user_id: msg.from!.id });
-                break;
-            case NewsletterProperty.Receivers:
-                list = await dbContext.getReceiverList(msg.from!.id);
-                count = await dbContext.receivers.countDocuments({ user_id: msg.from!.id });
-                break;
-        }
-
-        await bot.sendMessage(msg.chat.id, list, {
+        await bot.sendMediaGroup(msg.chat.id, media);
+        await bot.sendMessage(msg.chat.id, "###########################", {
             reply_markup: {
-                inline_keyboard: createInlineKeyboard(count, 3, property as NewsletterProperty)
+                inline_keyboard: previewKeyboard
+            }
+        })
+    } else {
+        await bot.sendMessage(msg.chat.id, newsletterMsg.body!, {
+            entities: newsletterMsg.entities,
+            disable_web_page_preview: true,
+            reply_markup: {
+                inline_keyboard: previewKeyboard
             }
         });
     }
-}
-
-
-bot.on('callback_query', async (ctx) => {
-    if (ctx.data == undefined) return;
-
-    const keyboardData = parseKeyboardCallback(ctx.data);
-    const newsletter = newsletterPool.get(ctx.from!.id);
-
-    if (!newsletter) {
-        console.log("Could not find newsletter in the pool with userid = ", ctx.from!.id);
-    }
-    else {
-        newsletter[keyboardData.property].add(keyboardData.buttonIndex);
-    }
-})
-
-
-/**
- * Sends newsletter with corresponding user id from newsletterPool.
- * Each message is sent by each bot to the each of users.
- */
-async function onSendNewsletter(msg: TelegramBot.Message) {
-    const newsletter = newsletterPool.get(msg.from!.id);
-    if (!newsletter) {
-        bot.sendMessage(msg.chat.id, "You must create newsletter with create_newsletter command");
-        return;
-    }
-    if (!newsletter.isValid()) {
-        bot.sendMessage(msg.chat.id, "Newsletter must contain at least one message, bot and reciever");
-        return;
-    }
-
-    const dbContext = await DatabaseContext.getInstance();
-    const messages = await dbContext.messages.find({ user_id: msg.from!.id }).toArray();
-    const bots = await dbContext.bots.find({ user_id: msg.from!.id }).toArray();
-    const recievers = await dbContext.receivers.find({ user_id: msg.from!.id }).toArray();
-    const messagePromises: Promise<any>[] = [];
-
-    for (const botInd of newsletter.bots) {
-        const botToken = bots[botInd]["token"];
-        const helperBot = new TelegramBot(botToken);
-
-        for (const messageInd of newsletter.messages) {
-            const messageDoc = messages[messageInd];
-            const imgIds: string[] = messageDoc["img_id"];
-
-            let message = "";
-            if (messageDoc["subject"]) {
-                message += `<b>${messageDoc["subject"]}</b>\n\n`;
-            }
-            if (messageDoc["body"]) {
-                message += messageDoc["body"];
-            }
-
-            for (const receiversListInd of newsletter.receivers) {
-                const fileId = recievers[receiversListInd]["csv_file_id"];
-                const file = await bot.getFile(fileId);
-                const url = `${baseBotUrl}${process.env.API_TOKEN}/${file.file_path}`;
-                const fileContent = (await getResource(url)).toString("utf8");
-                const userIds = fileContent.split(",");
-                newsletter.addLogEntry(botInd, messageInd, receiversListInd, userIds.length);
-
-                let userInd = 0;
-                for (const userId of userIds) {
-                    let media: InputMedia[];
-
-                    if (imgIds) {
-                        //TODO: change Promise.all to Promise.allSettled and handle image load error.
-                        const imgFiles = await Promise.all(imgIds.map(async (id) => await bot.getFile(id)));
-                        const responses = await Promise.all(imgFiles.map(async (file) => {
-                            const url = `${baseBotUrl}${process.env.API_TOKEN}/${file.file_path}`; 
-                            return await getResource(url);
-                        }));
-                        
-                        media = [];
-                        responses.forEach(response => {
-                            media.push({ type: 'photo', media: response as any});
-                        });
-
-                        media[0].caption = message;
-                        media[0].parse_mode = "HTML"
-                    }
-
-                    let receiverInd = userInd;
-                    const messagePromise = new Promise<void> ((resolve, reject) => {
-                        let sendPromise;
-                        if (media) {
-                            sendPromise = helperBot.sendMediaGroup(userId, media);
-                        } else {
-                            sendPromise = helperBot.sendMessage(userId, message, {
-                                parse_mode: "HTML"
-                            });
-                        }
-
-                        sendPromise
-                            .then(() => {
-                                newsletter.setLogResult(botInd, messageInd, receiversListInd, receiverInd, NewsletterResult.Succeeded);
-                                removeFromArray(messagePromises, messagePromise);
-                                resolve();
-                            })
-                            .catch((error) => {
-                                newsletter.setLogResult(botInd, messageInd, receiversListInd, receiverInd, NewsletterResult.Failed);
-                                removeFromArray(messagePromises, messagePromise);
-                                reject(error);
-                            });
-                            
-                    });
-                    messagePromises.push(messagePromise);
-
-                    userInd++;
-                }
-            }
-        }
-    }
-
-    await Promise.allSettled(messagePromises)
-
-    const log = newsletter.getBriefLog();
-    bot.sendMessage(msg.chat.id, 
-        `<b>Newsletter sent!</b>\n
-        Total messages: ${log.total}
-        Sent successfully: ${log.success}
-        Failed to send: ${log.fail}`,
-        {
-            parse_mode: "HTML"
-        }
-    );
-    
-    newsletterPool.delete(newsletter.getUserId());
 }

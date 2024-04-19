@@ -22,9 +22,10 @@ Object.defineProperty(exports, "__esModule", { value: true });
 const node_telegram_bot_api_1 = __importDefault(require("node-telegram-bot-api"));
 const mongodb_1 = require("mongodb");
 const mongodb_2 = require("mongodb");
+const bot_1 = __importDefault(require("../models/bot"));
 class DatabaseContext {
     constructor() {
-        this.subjectFromBodyLength = 30;
+        this.stagedObjects = new Map();
     }
     static getInstance() {
         return __awaiter(this, void 0, void 0, function* () {
@@ -47,9 +48,7 @@ class DatabaseContext {
             yield this.client.connect();
             const db = this.client.db(process.env.DATABASE_NAME);
             this.users = db.collection("users");
-            this.messages = db.collection("messages");
             this.bots = db.collection("bots");
-            this.receivers = db.collection("receivers");
         });
     }
     close() {
@@ -57,82 +56,78 @@ class DatabaseContext {
             yield this.client.close();
         });
     }
-    getMessageList(userId) {
+    getBotByInd(userId, botInd) {
         return __awaiter(this, void 0, void 0, function* () {
             var _a, e_1, _b, _c;
-            const userMessages = this.messages.find({ user_id: userId });
+            const userBots = this.bots.find({ user_id: userId });
             let ind = 0;
-            let resultList = "Your saved messages:";
+            let res;
             try {
-                for (var _d = true, userMessages_1 = __asyncValues(userMessages), userMessages_1_1; userMessages_1_1 = yield userMessages_1.next(), _a = userMessages_1_1.done, !_a; _d = true) {
-                    _c = userMessages_1_1.value;
+                for (var _d = true, userBots_1 = __asyncValues(userBots), userBots_1_1; userBots_1_1 = yield userBots_1.next(), _a = userBots_1_1.done, !_a; _d = true) {
+                    _c = userBots_1_1.value;
                     _d = false;
-                    const message = _c;
-                    resultList += this.createMessageListEntry(ind, message);
+                    const bot = _c;
+                    if (ind == botInd)
+                        res = bot;
                     ++ind;
                 }
             }
             catch (e_1_1) { e_1 = { error: e_1_1 }; }
             finally {
                 try {
-                    if (!_d && !_a && (_b = userMessages_1.return)) yield _b.call(userMessages_1);
+                    if (!_d && !_a && (_b = userBots_1.return)) yield _b.call(userBots_1);
                 }
                 finally { if (e_1) throw e_1.error; }
             }
-            return resultList;
+            return res ? new bot_1.default(res["user_id"], res["token"], res["csv_file_id"], res["receivers_count"]) : res;
         });
     }
     getBotList(userId) {
         return __awaiter(this, void 0, void 0, function* () {
             var _a, e_2, _b, _c;
-            const userTokens = this.bots.find({ user_id: userId });
+            const userBots = this.bots.find({ user_id: userId });
             let ind = 0;
-            let resultList = "Your saved bots:";
+            let resultList = "";
             try {
-                for (var _d = true, userTokens_1 = __asyncValues(userTokens), userTokens_1_1; userTokens_1_1 = yield userTokens_1.next(), _a = userTokens_1_1.done, !_a; _d = true) {
-                    _c = userTokens_1_1.value;
+                for (var _d = true, userBots_2 = __asyncValues(userBots), userBots_2_1; userBots_2_1 = yield userBots_2.next(), _a = userBots_2_1.done, !_a; _d = true) {
+                    _c = userBots_2_1.value;
                     _d = false;
-                    const token = _c;
-                    const userBot = new node_telegram_bot_api_1.default(token["token"]);
+                    const bot = _c;
+                    const userBot = new node_telegram_bot_api_1.default(bot["token"]);
                     const botName = (yield userBot.getMe()).username;
-                    resultList += `\n${ind + 1}. ${botName !== null && botName !== void 0 ? botName : "Unavailable"}`;
+                    resultList += `\n<b>${ind + 1}. ${botName !== null && botName !== void 0 ? botName : "Unavailable"}</b>
+            Number of receivers: ${bot["receivers_count"]}`;
                     ++ind;
                 }
             }
             catch (e_2_1) { e_2 = { error: e_2_1 }; }
             finally {
                 try {
-                    if (!_d && !_a && (_b = userTokens_1.return)) yield _b.call(userTokens_1);
+                    if (!_d && !_a && (_b = userBots_2.return)) yield _b.call(userBots_2);
                 }
                 finally { if (e_2) throw e_2.error; }
             }
             return resultList;
         });
     }
-    getReceiverList(userId) {
+    updateOrInsertStagedBot(userId) {
         return __awaiter(this, void 0, void 0, function* () {
-            var _a, e_3, _b, _c;
-            var _d;
-            const userReceivers = this.receivers.find({ user_id: userId });
-            let ind = 0;
-            let resultList = "Your saved recievers:";
+            const bot = this.stagedObjects.get(userId);
+            if (!(bot instanceof bot_1.default))
+                return false;
             try {
-                for (var _e = true, userReceivers_1 = __asyncValues(userReceivers), userReceivers_1_1; userReceivers_1_1 = yield userReceivers_1.next(), _a = userReceivers_1_1.done, !_a; _e = true) {
-                    _c = userReceivers_1_1.value;
-                    _e = false;
-                    const recievers = _c;
-                    resultList += `\n${ind + 1}. ${(_d = recievers["caption"]) !== null && _d !== void 0 ? _d : `Unnamed list ${ind + 1}`}`;
-                    ++ind;
-                }
+                yield this.bots.updateOne({ user_id: bot.user_id, token: bot.token }, {
+                    $set: {
+                        csv_file_id: bot.csv_file_id,
+                        receivers_count: bot.receivers_count
+                    }
+                }, { upsert: true });
+                this.validateCollectionSize(this.bots, bot.user_id);
             }
-            catch (e_3_1) { e_3 = { error: e_3_1 }; }
-            finally {
-                try {
-                    if (!_e && !_a && (_b = userReceivers_1.return)) yield _b.call(userReceivers_1);
-                }
-                finally { if (e_3) throw e_3.error; }
+            catch (error) {
+                return false;
             }
-            return resultList;
+            return true;
         });
     }
     validateCollectionSize(collection, userId) {
@@ -140,22 +135,9 @@ class DatabaseContext {
             const maxCount = process.env.MAX_COLLECTION_DOCUMENTS || 9;
             let countDocuments = yield collection.countDocuments({ user_id: userId });
             while (countDocuments-- > +maxCount) {
-                collection.deleteOne({ user_id: userId });
+                yield collection.deleteOne({ user_id: userId });
             }
         });
-    }
-    createMessageListEntry(ind, message) {
-        let entry;
-        if (message["subject"]) {
-            entry = `\n${ind + 1}. ${message["subject"]}`;
-        }
-        else if (message["body"] != null) {
-            entry = `\n${ind + 1}. ${message["body"].substring(0, this.subjectFromBodyLength)}...`;
-        }
-        else {
-            entry = `\n${ind + 1}. EmptyMessage`;
-        }
-        return entry;
     }
     /**
      * Validates user by trying to find his id in the database and if not found adding new entry.

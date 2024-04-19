@@ -1,19 +1,17 @@
 import TelegramBot from "node-telegram-bot-api";
-import { Collection, MongoClient, WithId } from "mongodb";
-import { ServerApiVersion } from 'mongodb';
-import Message from "../models/message";
+import { Collection, MongoClient } from "mongodb";
+import { ServerApiVersion, Filter } from 'mongodb';
 import User from "../models/user";
+import Bot from "../models/bot";
 
 
 export default class DatabaseContext {
     private static instance: DatabaseContext;
     private client!: MongoClient;
-    private subjectFromBodyLength = 30;
 
+    public stagedObjects: Map<number, any> = new Map<number, any>();
     public users!: Collection;
-    public messages!: Collection;
     public bots!: Collection;
-    public receivers!: Collection;
 
 
     private constructor() { }
@@ -39,77 +37,76 @@ export default class DatabaseContext {
         await this.client.connect();
         const db = this.client.db(process.env.DATABASE_NAME);
         this.users = db.collection("users");
-        this.messages = db.collection("messages");
         this.bots = db.collection("bots");
-        this.receivers = db.collection("receivers");
     }
 
     public async close(): Promise<void> {
         await this.client.close();
     }
 
-    public async getMessageList(userId: number): Promise<string> {
-        const userMessages = this.messages.find({ user_id: userId });
-
+    public async getBotByInd(userId: number, botInd: number): Promise<Bot | undefined> {
+        const userBots = this.bots.find({ user_id: userId});
         let ind = 0;
-        let resultList = "Your saved messages:";
-        for await (const message of userMessages) {
-            resultList += this.createMessageListEntry(ind, message as unknown as Message);
+        let res: any;
+        for await (const bot of userBots) {
+            if (ind == botInd) res = bot;
             ++ind;
         }
-
-        return resultList;
+        
+        return res ? new Bot(
+            res["user_id"],
+            res["token"],
+            res["csv_file_id"],
+            res["receivers_count"]
+        ) : res;
     }
 
     public async getBotList(userId: number): Promise<string> {
-        const userTokens = this.bots.find({ user_id: userId });
+        const userBots = this.bots.find({ user_id: userId });
 
         let ind = 0;
-        let resultList = "Your saved bots:";
-        for await (const token of userTokens) {
-            const userBot = new TelegramBot(token["token"]);
+        let resultList = "";
+        for await (const bot of userBots) {
+            const userBot = new TelegramBot(bot["token"]);
             const botName = (await userBot.getMe()).username;
-            resultList += `\n${ind + 1}. ${botName ?? "Unavailable"}`;
+            resultList += `\n<b>${ind + 1}. ${botName ?? "Unavailable"}</b>
+            Number of receivers: ${bot["receivers_count"]}`;
             ++ind;
         }
     
         return resultList;
     }
 
-    public async getReceiverList(userId: number): Promise<string> {
-        const userReceivers = this.receivers.find({ user_id: userId });
+    public async updateOrInsertStagedBot(userId: number): Promise<boolean> {
+        const bot = this.stagedObjects.get(userId);
+        if (!(bot instanceof Bot)) return false;
 
-        let ind = 0;
-        let resultList = "Your saved recievers:";
-        for await (const recievers of userReceivers) {
-            resultList += `\n${ind + 1}. ${recievers["caption"] ?? `Unnamed list ${ind + 1}`}`;
-            ++ind;
+        try {
+            await this.bots.updateOne(
+                { user_id: bot.user_id, token: bot.token },
+                { 
+                    $set: {
+                        csv_file_id: bot.csv_file_id,
+                        receivers_count: bot.receivers_count
+                    }
+                },
+                { upsert: true }
+            );
+            this.validateCollectionSize(this.bots, bot.user_id);
         }
-    
-        return resultList;
+        catch (error) {
+            return false;
+        }
+
+        return true;
     }
 
     public async validateCollectionSize(collection: Collection, userId: number) {
-        const maxCount = process.env.MAX_COLLECTION_DOCUMENTS || 9
+        const maxCount = process.env.MAX_COLLECTION_DOCUMENTS || 9;
         let countDocuments = await collection.countDocuments({ user_id: userId });
         while (countDocuments--  > +maxCount) {
-            collection.deleteOne({ user_id: userId });
+            await collection.deleteOne({ user_id: userId });
         }
-    }
-
-    private createMessageListEntry(ind: number, message: Message) {  
-        let entry: string;      
-        if (message["subject"]) {
-            entry = `\n${ind + 1}. ${message!["subject"]}`;
-        }
-        else if (message!["body"] != null) {
-            entry = `\n${ind + 1}. ${message!["body"].substring(0, this.subjectFromBodyLength)}...`;
-        }
-        else {
-            entry = `\n${ind + 1}. EmptyMessage`;
-        }
-
-        return entry;
     }
 
     /**
