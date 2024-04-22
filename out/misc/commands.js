@@ -1,10 +1,10 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.textIsCommand = void 0;
+exports.textToCommand = void 0;
 const commands = [
     {
         command: "start",
-        description: "Start work with bot"
+        description: "Start work with bot",
     },
     {
         command: "add_bot",
@@ -28,17 +28,18 @@ const commands = [
     }
 ];
 exports.default = commands;
-function textIsCommand(text) {
+function textToCommand(text) {
     if (!text)
-        return false;
-    let textIsCommand = false;
+        return undefined;
+    let res = undefined;
     commands.forEach((command) => {
         if (`/${command.command}` == text) {
-            textIsCommand = true;
+            res = command.command;
             return;
         }
     });
-    return textIsCommand;
+    return res;
+    ;
 }
-exports.textIsCommand = textIsCommand;
+exports.textToCommand = textToCommand;
 //# sourceMappingURL=commands.js.map

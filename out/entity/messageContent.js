@@ -1,14 +1,16 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.MessageContent = exports.messageAwaitTime = exports.messagePool = void 0;
-exports.messagePool = new Map();
-exports.messageAwaitTime = 1000;
+exports.messageAwaitTime = void 0;
+exports.messageAwaitTime = 500;
 class MessageContent {
     constructor(userId, body, imgIds, entities) {
         this.userId = userId;
         this.body = body;
         this.imgIds = imgIds;
         this.entities = entities;
+    }
+    getUserId() {
+        return this.userId;
     }
     isMediaGroup() {
         return this.imgIds != undefined;
@@ -44,5 +46,5 @@ class MessageContent {
         }
     }
 }
-exports.MessageContent = MessageContent;
+exports.default = MessageContent;
 //# sourceMappingURL=messageContent.js.map

@@ -1,10 +1,9 @@
 import { MessageEntity, Message } from "node-telegram-bot-api";
 
-export const messagePool: Map<number, MessageContent> = new Map<number, MessageContent>();
-export const messageAwaitTime = 1000;
+export const messageAwaitTime = 500;
 
-export class MessageContent {
-    public userId: number;
+export default class MessageContent {
+    private userId: number;
     public body?: string;
     public imgIds?: string[];
     public entities?: MessageEntity[];
@@ -17,6 +16,10 @@ export class MessageContent {
         this.body = body;
         this.imgIds = imgIds;
         this.entities = entities;
+    }
+
+    public getUserId() {
+        return this.userId;
     }
 
     public isMediaGroup(): boolean {

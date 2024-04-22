@@ -12,11 +12,35 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.removeFromArray = exports.getResource = exports.createInlineKeyboard = exports.parseKeyboardCallback = void 0;
+exports.removeFromArray = exports.getResource = exports.createInlineKeyboard = exports.parseKeyboardCallback = exports.initBot = void 0;
 const https_1 = __importDefault(require("https"));
+const node_telegram_bot_api_1 = __importDefault(require("node-telegram-bot-api"));
+function initBot(localhost) {
+    let options;
+    if (localhost) {
+        options = { polling: {
+                interval: 300,
+                autoStart: true
+            } };
+    }
+    else {
+        options = { webHook: {
+                port: +process.env.PORT
+            } };
+    }
+    const bot = new node_telegram_bot_api_1.default(process.env.API_TOKEN, options);
+    if (localhost) {
+        bot.on("polling_error", err => console.log(err.message));
+    }
+    else {
+        bot.setWebHook(`${process.env.APP_URL}/bot${process.env.API_TOKEN}`);
+    }
+    return bot;
+}
+exports.initBot = initBot;
 /**
  * Retrieves newsletter property associated with keyboard and index of pressed button from string.
- * @param data string in format "NewsletterProperty:ButtonIndex".
+ * @param data string in format "UserState:ButtonIndex".
  */
 function parseKeyboardCallback(data) {
     const pivot = data.indexOf(':');
@@ -43,7 +67,6 @@ function createInlineKeyboard(buttons, cols, state, labels) {
     return keyboard;
 }
 exports.createInlineKeyboard = createInlineKeyboard;
-//axios подключал, когда пробовал отправлять изображения, но решил что хватит и https. Забыл почистить зависимости.
 function getResource(url) {
     return __awaiter(this, void 0, void 0, function* () {
         return new Promise((resolve, reject) => {

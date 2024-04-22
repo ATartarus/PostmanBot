@@ -1,7 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.UserState = exports.userStates = void 0;
-exports.userStates = new Map();
+exports.UserState = void 0;
 var UserState;
 (function (UserState) {
     UserState[UserState["Idle"] = 0] = "Idle";

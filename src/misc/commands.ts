@@ -1,7 +1,7 @@
 const commands = [
     {
         command: "start",
-        description: "Start work with bot"
+        description: "Start work with bot",
     },
     {
         command: "add_bot",
@@ -27,16 +27,16 @@ const commands = [
 
 export default commands;
 
-export function textIsCommand(text: string | undefined) {
-    if (!text) return false;
+export function textToCommand(text: string | undefined): string | undefined {
+    if (!text) return undefined;
     
-    let textIsCommand = false;
+    let res: string | undefined = undefined;
     commands.forEach((command) => {
         if (`/${command.command}` == text) {
-            textIsCommand = true;
+            res = command.command;
             return;
         }
     });
 
-    return textIsCommand;
+    return res;;
 }

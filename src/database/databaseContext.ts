@@ -1,8 +1,8 @@
 import TelegramBot from "node-telegram-bot-api";
 import { Collection, MongoClient } from "mongodb";
 import { ServerApiVersion, Filter } from 'mongodb';
-import User from "../models/user";
-import Bot from "../models/bot";
+import User from "./user";
+import Bot from "./bot";
 
 
 export default class DatabaseContext {
