@@ -3,9 +3,9 @@ import { UserState } from "./userState";
 import TelegramBot from "node-telegram-bot-api";
 
 
-export function initBot(localhost: boolean): TelegramBot {
+export function initBot(polling: boolean): TelegramBot {
     let options: TelegramBot.ConstructorOptions;
-    if (localhost) {
+    if (polling) {
         options = { polling: {
             interval: 300,
             autoStart: true
@@ -20,7 +20,7 @@ export function initBot(localhost: boolean): TelegramBot {
         options
     );
     
-    if (localhost) {
+    if (polling) {
         bot.on("polling_error", err => console.log(err.message));
     } else {
         bot.setWebHook(`${process.env.APP_URL}/bot${process.env.API_TOKEN}`);
